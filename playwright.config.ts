@@ -5,6 +5,6 @@ export default defineConfig({
   timeout: 30_000,
   workers: 1,
   use: {
-    headless: false
+    headless: true
   }
 });

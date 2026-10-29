@@ -90,6 +90,7 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
   try {
     context = await chromium.launchPersistentContext(userDataDir, {
       channel: 'chromium',
+      headless: true,
       viewport: { width: 1440, height: 900 },
       args: [
         `--disable-extensions-except=${distPath}`,
@@ -107,12 +108,16 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
     const page = await context.newPage();
     const pageErrors: string[] = [];
     const consoleErrors: string[] = [];
+    const sandboxWarnings: string[] = [];
     page.on('pageerror', (err) => {
       pageErrors.push(err.message);
     });
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         consoleErrors.push(msg.text());
+      }
+      if (/escape its sandboxing/i.test(msg.text())) {
+        sandboxWarnings.push(msg.text());
       }
     });
 
@@ -442,7 +447,9 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
       .frameLocator('section[data-provider="telegram"] iframe')
       .locator('#chat-input');
     await tgInput.click();
-    await expect(tgInput).toBeFocused();
+    await expect
+      .poll(async () => getFrame('telegram').evaluate(() => document.activeElement?.id))
+      .toBe('chat-input');
     await page.keyboard.press('Alt+m');
     await expect(page.locator('section[data-provider="telegram"]')).toHaveAttribute(
       'data-maximized',
@@ -452,7 +459,9 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
     const crossMaxTgBox = (await page.locator('section[data-provider="telegram"]').boundingBox())!;
     expect(crossMaxTgBox).toEqual({ x: 0, y: 0, width: 1440, height: 900 });
 
-    await expect(tgInput).toBeFocused();
+    expect(await getFrame('telegram').evaluate(() => document.activeElement?.id)).toBe(
+      'chat-input'
+    );
     await page.keyboard.press('Alt+m');
     await expect(page.locator('section[data-provider="telegram"]')).not.toHaveAttribute(
       'data-maximized',
@@ -582,6 +591,21 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
       .poll(async () => sw.evaluate(() => chrome.action.getBadgeText({})))
       .toBe('2');
 
+    // 6. Pause -> Reload Workspace with paused pane in storage -> Resume: verify ZERO Blink sandbox-escape warnings
+    await page.locator('section[data-provider="discord"] button[data-action="pause"]').click();
+    await expect(
+      page.locator('section[data-provider="discord"] .paused-overlay')
+    ).toBeVisible();
+    await page.reload({ waitUntil: 'load' });
+    await expect(
+      page.locator('section[data-provider="discord"] .paused-overlay')
+    ).toBeVisible();
+    await page.locator('section[data-provider="discord"] .paused-overlay button').click();
+    await expect(
+      page.frameLocator('section[data-provider="discord"] iframe').locator('#provider-heading')
+    ).toHaveText('discord');
+
+    expect(sandboxWarnings).toEqual([]);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
   } finally {

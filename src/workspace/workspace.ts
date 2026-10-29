@@ -25,7 +25,8 @@ import { updateWorkspaceFavicon } from './favicon';
 const STORAGE_KEY = 'dia_bento_prefs_v1';
 const SANDBOX_FLAGS =
   'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads';
-const ALLOW_PERMS = 'clipboard-read; clipboard-write; microphone; camera';
+const ALLOW_PERMS =
+  'clipboard-read; clipboard-write; microphone; camera; display-capture; publickey-credentials-get';
 
 interface PaneDom {
   section: HTMLElement;
@@ -215,12 +216,14 @@ function setPausedDom(providerId: ProviderId, paused: boolean): void {
     if (maximizedProvider === providerId) {
       maximizedProvider = null;
     }
+    pane.iframe.setAttribute('sandbox', '');
     pane.iframe.src = 'about:blank';
     pane.pausedOverlay.classList.remove('hidden');
     unreads[providerId] = 0;
     updateUnreadUi();
   } else {
     pane.pausedOverlay.classList.add('hidden');
+    pane.iframe.setAttribute('sandbox', SANDBOX_FLAGS);
     pane.iframe.src = resolveEmbedUrl(providerId, testOrigin);
   }
 }
@@ -367,11 +370,12 @@ function mountPanes(): void {
     const body = document.createElement('div');
     body.className = 'pane-body';
 
+    const isPaused = prefs.paused[providerId];
     const iframe = document.createElement('iframe');
     iframe.className = 'pane-iframe';
-    iframe.setAttribute('sandbox', SANDBOX_FLAGS);
+    iframe.setAttribute('sandbox', isPaused ? '' : SANDBOX_FLAGS);
     iframe.setAttribute('allow', ALLOW_PERMS);
-    iframe.src = prefs.paused[providerId] ? 'about:blank' : resolveEmbedUrl(providerId, testOrigin);
+    iframe.src = isPaused ? 'about:blank' : resolveEmbedUrl(providerId, testOrigin);
     iframe.addEventListener('load', () => {
       const effectiveMain = maximizedProvider
         ? maximizedProvider === providerId

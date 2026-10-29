@@ -689,9 +689,11 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     const telegramIframe = telegramPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
     const discordIframe = discordPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
 
-    // Local testOrigin applied to active pane, while pre-paused Discord starts at about:blank
+    // Local testOrigin applied to active pane, while pre-paused Discord starts at about:blank with strict opaque sandbox=""
     expect(telegramIframe.src).toBe('http://127.0.0.1:4321/telegram');
+    expect(telegramIframe.getAttribute('sandbox')).toContain('allow-scripts');
     expect(discordIframe.src).toBe('about:blank');
+    expect(discordIframe.getAttribute('sandbox')).toBe('');
     expect(
       discordPane.querySelector('.paused-overlay')!.classList.contains('hidden')
     ).toBe(false);
@@ -716,9 +718,10 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
       expect(header.textContent).not.toContain('Sub 2fps');
     }
 
-    // Pause Telegram -> about:blank + overlay shown + aria-label & data-paused updated
+    // Pause Telegram -> strict sandbox="" + about:blank + overlay shown + aria-label & data-paused updated
     tgPauseBtn.click();
     expect(telegramIframe.src).toBe('about:blank');
+    expect(telegramIframe.getAttribute('sandbox')).toBe('');
     expect(tgPauseBtn.dataset.paused).toBe('true');
     expect(tgPauseBtn.getAttribute('aria-label')).toBe('Mở lại khung');
     expect(
@@ -741,6 +744,8 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
       notifToken: 'nt-99'
     });
     expect(telegramIframe.src).toBe('http://127.0.0.1:4321/telegram');
+    expect(telegramIframe.getAttribute('sandbox')).toContain('allow-scripts');
+    expect(telegramIframe.getAttribute('sandbox')).toContain('allow-same-origin');
     expect(telegramPane.dataset.slot).toBe('main');
     expect(tgPostSpy).toHaveBeenCalledWith(
       { type: 'DIA_CLICK_NOTIFY', notifToken: 'nt-99' },
