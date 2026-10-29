@@ -245,10 +245,12 @@ function focusProvider(providerId: ProviderId): void {
 
 function toggleMaximize(targetProvider?: ProviderId, focusFrame = true): void {
   const candidate = targetProvider ?? activeProvider ?? prefs.slotOrder[0];
+  let wasPaused = false;
   if (maximizedProvider === candidate) {
     maximizedProvider = null;
   } else {
     if (prefs.paused[candidate]) {
+      wasPaused = true;
       setPausedDom(candidate, false);
       savePrefs();
     }
@@ -257,7 +259,10 @@ function toggleMaximize(targetProvider?: ProviderId, focusFrame = true): void {
   }
   applyLayout();
   if (focusFrame && maximizedProvider && !prefs.paused[maximizedProvider]) {
-    panes.get(maximizedProvider)?.iframe.focus();
+    const targetIframe = panes.get(maximizedProvider)?.iframe;
+    if (targetIframe && (wasPaused || document.activeElement !== targetIframe)) {
+      targetIframe.focus();
+    }
   }
 }
 
@@ -427,11 +432,12 @@ function applyNotificationClickTarget(target: PendingClickTarget): void {
 
 function onRuntimeMessage(
   msg: RuntimeMessage,
-  _sender?: chrome.runtime.MessageSender,
+  sender?: chrome.runtime.MessageSender,
   sendResponse?: (res?: unknown) => void
 ): void {
   if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
   if (msg.type === 'UNREAD_UPDATE') {
+    if (sender?.tab) return;
     if (!Object.hasOwn(PROVIDERS, msg.providerId)) return;
     if (prefs.paused[msg.providerId]) return;
     const nextCount =
@@ -446,10 +452,12 @@ function onRuntimeMessage(
       reportFocusState();
     }
   } else if (msg.type === 'FOCUS_PROVIDER') {
+    if (sender?.tab) return;
     if (Object.hasOwn(PROVIDERS, msg.providerId)) {
       focusProvider(msg.providerId);
     }
   } else if (msg.type === 'TOGGLE_MAXIMIZE') {
+    if (sender?.tab) return;
     toggleMaximize(
       msg.providerId && Object.hasOwn(PROVIDERS, msg.providerId) ? msg.providerId : undefined
     );
@@ -483,6 +491,47 @@ function detectFocusedIframeOnBlur(): void {
 
 function bindEvents(): void {
   const { signal } = lifecycle;
+
+  const topbarShell = document.getElementById('topbar-shell');
+  let isTopbarHovered = false;
+  const setTopbarHovered = (hovered: boolean): void => {
+    if (isTopbarHovered === hovered) return;
+    isTopbarHovered = hovered;
+    topbarShell?.classList.toggle('is-hovered', hovered);
+    if (hovered) {
+      const msg: WorkspaceToFrameMessage = {
+        source: 'dia-bento-workspace',
+        type: 'DIA_TOPBAR_OPEN'
+      };
+      for (const [id, pane] of panes.entries()) {
+        if (!prefs.paused[id]) {
+          pane.iframe.contentWindow?.postMessage(msg, '*');
+        }
+      }
+    }
+  };
+  topbarShell?.addEventListener('mouseenter', () => setTopbarHovered(true), { signal });
+  topbarShell?.addEventListener('mousemove', () => setTopbarHovered(true), { signal });
+  topbarShell?.addEventListener('mouseleave', () => setTopbarHovered(false), { signal });
+  document.documentElement?.addEventListener('mouseleave', () => setTopbarHovered(false), {
+    signal
+  });
+  window.addEventListener(
+    'message',
+    (ev: MessageEvent) => {
+      const data = ev.data as { source?: unknown; type?: unknown } | null;
+      if (
+        data &&
+        typeof data === 'object' &&
+        data.source === 'dia-bento-frame' &&
+        data.type === 'DIA_FRAME_HOVER' &&
+        Array.from(panes.values()).some((p) => p.iframe.contentWindow === ev.source)
+      ) {
+        setTopbarHovered(false);
+      }
+    },
+    { signal }
+  );
 
   document.getElementById('btn-lite-media')?.addEventListener('click', () => {
     prefs.liteMedia = !prefs.liteMedia;

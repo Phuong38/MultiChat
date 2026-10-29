@@ -98,8 +98,8 @@ body.has-unread #topbar-pill {
   transition: transform 0.15s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-#topbar-shell:hover #topbar,
-#topbar-shell:focus-within #topbar,
+#topbar-shell.is-hovered #topbar,
+#topbar-shell:has(:focus-visible) #topbar,
 body.has-dup-tabs #topbar,
 body.topbar-pinned #topbar {
   transform: translateY(0);
@@ -304,6 +304,7 @@ body[data-maximized] .pane:not([data-maximized="true"]) {
 body[data-maximized] .pane[data-maximized="true"] {
   position: absolute;
   inset: 0;
+  grid-area: auto;
   z-index: 25;
   border-bottom: none;
 }

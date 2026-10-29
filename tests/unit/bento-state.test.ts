@@ -645,7 +645,9 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
       }
     };
     const sentRuntime: RuntimeMessage[] = [];
-    const runtimeListeners: Array<(msg: RuntimeMessage) => void> = [];
+    const runtimeListeners: Array<
+      (msg: RuntimeMessage, sender?: chrome.runtime.MessageSender) => void
+    > = [];
 
     vi.stubGlobal('chrome', {
       storage: {
@@ -662,9 +664,11 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
           cb?.({});
         }),
         onMessage: {
-          addListener: vi.fn((fn: (msg: RuntimeMessage) => void) => {
-            runtimeListeners.push(fn);
-          }),
+          addListener: vi.fn(
+            (fn: (msg: RuntimeMessage, sender?: chrome.runtime.MessageSender) => void) => {
+              runtimeListeners.push(fn);
+            }
+          ),
           removeListener: vi.fn()
         },
         lastError: undefined
@@ -1006,7 +1010,9 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
 
     const storedState: Record<string, unknown> = {};
     const sentRuntime: RuntimeMessage[] = [];
-    const runtimeListeners: Array<(msg: RuntimeMessage) => void> = [];
+    const runtimeListeners: Array<
+      (msg: RuntimeMessage, sender?: chrome.runtime.MessageSender) => void
+    > = [];
 
     vi.stubGlobal('chrome', {
       storage: {
@@ -1023,9 +1029,11 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
           cb?.({});
         }),
         onMessage: {
-          addListener: vi.fn((fn: (msg: RuntimeMessage) => void) => {
-            runtimeListeners.push(fn);
-          }),
+          addListener: vi.fn(
+            (fn: (msg: RuntimeMessage, sender?: chrome.runtime.MessageSender) => void) => {
+              runtimeListeners.push(fn);
+            }
+          ),
           removeListener: vi.fn()
         },
         lastError: undefined
@@ -1093,15 +1101,51 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     );
     expect(document.body.dataset.maximized).toBeUndefined();
 
-    // Runtime TOGGLE_MAXIMIZE forwarded from cross-origin iframe toggles Maximize and focuses target iframe
+    // Runtime TOGGLE_MAXIMIZE forwarded from service worker toggles Maximize once; direct content-script fan-out (sender.tab defined) is ignored to prevent double-toggle
     const tgPane = document.querySelector<HTMLElement>('section.pane[data-provider="telegram"]')!;
     const tgIframe = tgPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
     const tgFocusSpy = vi.spyOn(tgIframe, 'focus');
+    const tabSender = { tab: { id: 10 } } as unknown as chrome.runtime.MessageSender;
+    runtimeListeners[0]?.({ type: 'TOGGLE_MAXIMIZE', providerId: 'telegram' }, tabSender);
+    expect(document.body.dataset.maximized).toBeUndefined();
     runtimeListeners[0]?.({ type: 'TOGGLE_MAXIMIZE', providerId: 'telegram' });
     expect(document.body.dataset.maximized).toBe('telegram');
     expect(tgFocusSpy).toHaveBeenCalledTimes(1);
+    runtimeListeners[0]?.({ type: 'TOGGLE_MAXIMIZE', providerId: 'telegram' }, tabSender);
+    expect(document.body.dataset.maximized).toBe('telegram');
     runtimeListeners[0]?.({ type: 'TOGGLE_MAXIMIZE', providerId: 'telegram' });
     expect(document.body.dataset.maximized).toBeUndefined();
+
+    // Auto-Hide Topbar hover handshake notifies mounted iframes on open and clears .is-hovered on DIA_FRAME_HOVER
+    const topbarShell = document.getElementById('topbar-shell')!;
+    const tgPostSpy = vi.fn();
+    const fakeTgWin = { postMessage: tgPostSpy } as unknown as Window;
+    Object.defineProperty(tgIframe, 'contentWindow', {
+      value: fakeTgWin,
+      configurable: true
+    });
+    topbarShell.dispatchEvent(new MouseEvent('mouseenter'));
+    expect(topbarShell.classList.contains('is-hovered')).toBe(true);
+    expect(tgPostSpy).toHaveBeenCalledWith(
+      { source: 'dia-bento-workspace', type: 'DIA_TOPBAR_OPEN' },
+      '*'
+    );
+    // Untrusted source window cannot clear .is-hovered
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: {} as Window,
+        data: { source: 'dia-bento-frame', type: 'DIA_FRAME_HOVER' }
+      })
+    );
+    expect(topbarShell.classList.contains('is-hovered')).toBe(true);
+    // Mounted pane iframe window clears .is-hovered immediately
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        source: fakeTgWin,
+        data: { source: 'dia-bento-frame', type: 'DIA_FRAME_HOVER' }
+      })
+    );
+    expect(topbarShell.classList.contains('is-hovered')).toBe(false);
 
     // 4) Splitter drag updates #resize-indicator and double-click resets --main-width to 66%
     Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true });

@@ -71,12 +71,17 @@ export type RuntimeMessage =
   | { type: 'TRIGGER_NOTIFY_CLICK'; providerId: ProviderId; notifToken?: string }
   | { type: 'DUP_TABS_CHANGED'; tabs: ExternalProviderTab[] };
 
-export type WorkspaceToFrameMessage = {
-  source: 'dia-bento-workspace';
-  type: 'DIA_SLOT_MODE';
-  providerId: ProviderId;
-  isMain: boolean;
-};
+export type WorkspaceToFrameMessage =
+  | {
+      source: 'dia-bento-workspace';
+      type: 'DIA_SLOT_MODE';
+      providerId: ProviderId;
+      isMain: boolean;
+    }
+  | {
+      source: 'dia-bento-workspace';
+      type: 'DIA_TOPBAR_OPEN';
+    };
 
 export type MainToIsolatedEvent = {
   type: 'RAW_NOTIFY';

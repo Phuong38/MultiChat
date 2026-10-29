@@ -42,6 +42,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   let isHovered = false;
   let lastReportedUnread = -1;
   let lastFocusSentAt = -Infinity;
+  let parentTopbarOpen = false;
   let domBooted = false;
   let observer: MutationObserver | null = null;
   let bodyObserver: MutationObserver | null = null;
@@ -160,6 +161,16 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
       }
       isMainSlot = data.isMain;
       applySlotPolicy();
+    } else if (
+      'source' in data &&
+      data.source === 'dia-bento-workspace' &&
+      data.type === 'DIA_TOPBAR_OPEN'
+    ) {
+      parentTopbarOpen = true;
+      if (isHovered) {
+        isHovered = false;
+        applySlotPolicy();
+      }
     } else if (data.type === 'DIA_CLICK_NOTIFY' && typeof data.notifToken === 'string') {
       sendToMain({ type: 'CLICK_NOTIFY', notifToken: data.notifToken });
     }
@@ -191,9 +202,38 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     sendToBackground({ type: 'FRAME_FOCUSED', providerId });
   };
 
+  const notifyParentFrameHover = (): void => {
+    parentTopbarOpen = false;
+    try {
+      window.parent?.postMessage?.(
+        { source: 'dia-bento-frame', type: 'DIA_FRAME_HOVER' },
+        expectedExtensionOrigin ?? '*'
+      );
+    } catch {
+      // Ignore cross-frame postMessage errors during teardown
+    }
+  };
+
   const onMouseEnter = (): void => {
     isHovered = true;
     applySlotPolicy();
+    notifyParentFrameHover();
+  };
+
+  const onPointerMove = (): void => {
+    if (!isHovered) {
+      isHovered = true;
+      applySlotPolicy();
+      notifyParentFrameHover();
+      return;
+    }
+    if (parentTopbarOpen) {
+      notifyParentFrameHover();
+    }
+  };
+
+  const onFrameBlur = (): void => {
+    lastFocusSentAt = -Infinity;
   };
 
   const onMouseLeave = (): void => {
@@ -208,6 +248,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     evaluateUnread();
 
     document.documentElement?.addEventListener('mouseenter', onMouseEnter);
+    document.documentElement?.addEventListener('pointermove', onPointerMove, { passive: true });
     document.documentElement?.addEventListener('mouseleave', onMouseLeave);
 
     observer = new MutationObserver(() => evaluateUnread());
@@ -241,6 +282,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('pointerdown', onFrameInteraction, true);
   window.addEventListener('focusin', onFrameInteraction, true);
+  window.addEventListener('blur', onFrameBlur);
 
   if (document.readyState === 'loading') {
     window.addEventListener('DOMContentLoaded', bootDomObservers, { once: true });
@@ -255,8 +297,10 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('pointerdown', onFrameInteraction, true);
       window.removeEventListener('focusin', onFrameInteraction, true);
+      window.removeEventListener('blur', onFrameBlur);
       window.removeEventListener('DOMContentLoaded', bootDomObservers);
       document.documentElement?.removeEventListener('mouseenter', onMouseEnter);
+      document.documentElement?.removeEventListener('pointermove', onPointerMove);
       document.documentElement?.removeEventListener('mouseleave', onMouseLeave);
       observer?.disconnect();
       observer = null;

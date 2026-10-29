@@ -353,7 +353,8 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       }
     });
 
-    const fakeWorkspaceWin = {} as Window;
+    const parentPostSpy = vi.fn();
+    const fakeWorkspaceWin = { postMessage: parentPostSpy } as unknown as Window;
     Object.defineProperty(window, 'top', {
       value: fakeWorkspaceWin,
       configurable: true
@@ -403,8 +404,31 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
     expect(rafCb).toHaveBeenCalledTimes(1);
     expect(nativeRafCount).toBe(0);
 
-    // Hovering sub-pane temporarily unthrottles rAF while keeping CSS diet
+    // Hovering sub-pane temporarily unthrottles rAF while keeping CSS diet and notifies workspace topbar
     document.documentElement.dispatchEvent(new Event('mouseenter'));
+    expect(parentPostSpy).toHaveBeenCalledWith(
+      { source: 'dia-bento-frame', type: 'DIA_FRAME_HOVER' },
+      'chrome-extension://dia-ext-id'
+    );
+    parentPostSpy.mockClear();
+    document.documentElement.dispatchEvent(new Event('pointermove'));
+    expect(parentPostSpy).not.toHaveBeenCalled();
+
+    // DIA_TOPBAR_OPEN resets stuck hover state and next pointermove notifies parent once
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: 'chrome-extension://dia-ext-id',
+        data: {
+          source: 'dia-bento-workspace',
+          type: 'DIA_TOPBAR_OPEN'
+        }
+      })
+    );
+    document.documentElement.dispatchEvent(new Event('pointermove'));
+    expect(parentPostSpy).toHaveBeenCalledTimes(1);
+    document.documentElement.dispatchEvent(new Event('pointermove'));
+    expect(parentPostSpy).toHaveBeenCalledTimes(1);
+
     window.requestAnimationFrame(rafCb);
     vi.advanceTimersByTime(20);
     expect(nativeRafCount).toBe(1);
@@ -578,6 +602,11 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
     vi.advanceTimersByTime(800);
     window.dispatchEvent(new Event('focusin', { bubbles: true }));
     expect(sentMessages.filter((m) => m.type === 'FRAME_FOCUSED')).toHaveLength(2);
+    // Frame blur resets cooldown so returning within <800ms still reports FRAME_FOCUSED
+    vi.advanceTimersByTime(100);
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(sentMessages.filter((m) => m.type === 'FRAME_FOCUSED')).toHaveLength(3);
 
     // Title mutation fires MutationObserver immediately without waiting for 3000ms poll
     sentMessages.length = 0;
