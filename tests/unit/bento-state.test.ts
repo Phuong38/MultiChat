@@ -7,6 +7,7 @@ import type { ProviderId, RuntimeMessage, WorkspacePrefs } from '../../src/share
 import {
   DEFAULT_PREFS,
   SLOT_IDS,
+  type ShortcutKeyInput,
   clampMainWidth,
   extractAltShortcutDigit,
   formatSplitRatio,
@@ -16,6 +17,10 @@ import {
   sanitizeWorkspacePrefs,
   swapProviderToMain
 } from '../../src/workspace/bento-state';
+import {
+  isAltMaximizeShortcut as sharedIsAltMaximizeShortcut,
+  type ShortcutKeyInput as SharedShortcutKeyInput
+} from '../../src/shared/shortcuts';
 import { updateWorkspaceFavicon } from '../../src/workspace/favicon';
 import { createActionIconSvg, createBrandIconSvg } from '../../src/workspace/icons';
 
@@ -150,16 +155,16 @@ describe('BentoState pure functions', () => {
   });
 
   it('detects Alt+M and macOS Option+M maximize shortcut', () => {
-    expect(
-      isAltMaximizeShortcut({
-        altKey: true,
-        ctrlKey: false,
-        metaKey: false,
-        shiftKey: false,
-        code: 'KeyM',
-        key: 'm'
-      })
-    ).toBe(true);
+    const sample: ShortcutKeyInput & SharedShortcutKeyInput = {
+      altKey: true,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      code: 'KeyM',
+      key: 'm'
+    };
+    expect(isAltMaximizeShortcut).toBe(sharedIsAltMaximizeShortcut);
+    expect(isAltMaximizeShortcut(sample)).toBe(true);
     // macOS Option+M produces 'µ' in ev.key with 'KeyM' in ev.code
     expect(
       isAltMaximizeShortcut({
@@ -400,11 +405,20 @@ describe('BentoState pure functions', () => {
     expect(fillText).toHaveBeenCalledWith('4', 48, 17);
     expect(link.getAttribute('href')).toBe('data:image/png;base64,bW9ja2Zhdmljb24=');
 
+    updateWorkspaceFavicon(document, 3.9);
+    expect(fillText).toHaveBeenLastCalledWith('3', 48, 17);
+
     updateWorkspaceFavicon(document, 14);
     expect(fillText).toHaveBeenLastCalledWith('9+', 48, 17);
     expect(link.href.startsWith('data:image/png')).toBe(true);
 
-    // 4) Resetting totalUnread to 0 restores static 32px icon
+    // 4) Resetting totalUnread to 0, negative, NaN, or Infinity restores static 32px icon
+    updateWorkspaceFavicon(document, Number.NaN);
+    expect(link.getAttribute('href')).toBe('icons/icon-32.png');
+    link.href = 'data:image/png;base64,stale';
+    updateWorkspaceFavicon(document, Number.POSITIVE_INFINITY);
+    expect(link.getAttribute('href')).toBe('icons/icon-32.png');
+    link.href = 'data:image/png;base64,stale';
     updateWorkspaceFavicon(document, 0);
     expect(link.getAttribute('href')).toBe('icons/icon-32.png');
   });
@@ -1021,23 +1035,42 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     await import('../../src/workspace/workspace');
     await flushMicrotasks();
 
-    // 1) Topbar defaults to unpinned auto-hide, clicking #btn-pin-topbar pins and persists topbarPinned
+    // 1) Topbar defaults to unpinned auto-hide, clicking #btn-pin-topbar pins, syncs aria-pressed + labels, and persists topbarPinned
     expect(document.body.classList.contains('topbar-pinned')).toBe(false);
     const pinBtn = document.getElementById('btn-pin-topbar')!;
+    const liteBtn = document.getElementById('btn-lite-media')!;
+    const hideBtn = document.getElementById('btn-hide-preview')!;
+    const dndBtn = document.getElementById('btn-dnd')!;
+    expect(liteBtn.getAttribute('aria-pressed')).toBe('false');
+    expect(hideBtn.getAttribute('aria-pressed')).toBe('false');
+    expect(dndBtn.getAttribute('aria-pressed')).toBe('false');
+    expect(pinBtn.getAttribute('aria-pressed')).toBe('false');
+    expect(pinBtn.getAttribute('aria-label')).toBe('Ghim cố định thanh công cụ');
+    expect(pinBtn.title).toBe('Ghim cố định thanh công cụ');
+
     pinBtn.click();
     expect(document.body.classList.contains('topbar-pinned')).toBe(true);
+    expect(pinBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(pinBtn.getAttribute('aria-label')).toBe('Bỏ ghim thanh công cụ');
+    expect(pinBtn.title).toBe('Bỏ ghim thanh công cụ');
     expect((storedState.dia_bento_prefs_v1 as WorkspacePrefs).topbarPinned).toBe(true);
+
+    liteBtn.click();
+    expect(liteBtn.getAttribute('aria-pressed')).toBe('true');
 
     // 2) Brand SVG icon and 4 SVG action buttons exist in every header with zero debug fps text
     const msgrPane = document.querySelector<HTMLElement>('section.pane[data-provider="messenger"]')!;
+    const msgrIframe = msgrPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
     expect(msgrPane.querySelector('svg.brand-icon')).not.toBeNull();
     expect(msgrPane.querySelector('.pane-header')!.textContent).not.toContain('2fps');
 
-    // 3) Maximize Messenger via button -> body[data-maximized="messenger"], Escape exits Maximize without DOM reparenting
+    // 3) Maximize Messenger via button keeps parent focus (does NOT call iframe.focus()) so Escape exits Maximize immediately
+    const msgrFocusSpy = vi.spyOn(msgrIframe, 'focus');
     const msgrMaxBtn = msgrPane.querySelector<HTMLButtonElement>('button[data-action="maximize"]')!;
     msgrMaxBtn.click();
     expect(document.body.dataset.maximized).toBe('messenger');
     expect(msgrPane.dataset.maximized).toBe('true');
+    expect(msgrFocusSpy).not.toHaveBeenCalled();
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }));
     expect(document.body.dataset.maximized).toBeUndefined();
@@ -1045,15 +1078,29 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
 
     // Note: maximizing Messenger set activeProvider = 'messenger'; focus Zalo first so active pane is 'zalo'
     runtimeListeners[0]?.({ type: 'ACTIVE_PROVIDER_CHANGED', providerId: 'zalo' });
+    const zaloPane = document.querySelector<HTMLElement>('section.pane[data-provider="zalo"]')!;
+    const zaloIframe = zaloPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
+    const zaloFocusSpy = vi.spyOn(zaloIframe, 'focus');
 
-    // Alt+M (macOS Option+M: code KeyM, key 'µ') toggles Maximize on currently active pane (zalo)
+    // Alt+M (macOS Option+M: code KeyM, key 'µ') toggles Maximize on currently active pane (zalo) and focuses iframe
     window.dispatchEvent(
       new KeyboardEvent('keydown', { altKey: true, code: 'KeyM', key: 'µ', cancelable: true })
     );
     expect(document.body.dataset.maximized).toBe('zalo');
+    expect(zaloFocusSpy).toHaveBeenCalledTimes(1);
     window.dispatchEvent(
       new KeyboardEvent('keydown', { altKey: true, code: 'KeyM', key: 'µ', cancelable: true })
     );
+    expect(document.body.dataset.maximized).toBeUndefined();
+
+    // Runtime TOGGLE_MAXIMIZE forwarded from cross-origin iframe toggles Maximize and focuses target iframe
+    const tgPane = document.querySelector<HTMLElement>('section.pane[data-provider="telegram"]')!;
+    const tgIframe = tgPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
+    const tgFocusSpy = vi.spyOn(tgIframe, 'focus');
+    runtimeListeners[0]?.({ type: 'TOGGLE_MAXIMIZE', providerId: 'telegram' });
+    expect(document.body.dataset.maximized).toBe('telegram');
+    expect(tgFocusSpy).toHaveBeenCalledTimes(1);
+    runtimeListeners[0]?.({ type: 'TOGGLE_MAXIMIZE', providerId: 'telegram' });
     expect(document.body.dataset.maximized).toBeUndefined();
 
     // 4) Splitter drag updates #resize-indicator and double-click resets --main-width to 66%
@@ -1070,22 +1117,22 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
 
     // 5) ACTIVE_PROVIDER_CHANGED moves data-active="true" to sub-pane without swapping slots
     runtimeListeners[0]?.({ type: 'ACTIVE_PROVIDER_CHANGED', providerId: 'telegram' });
-    const tgPane = document.querySelector<HTMLElement>('section.pane[data-provider="telegram"]')!;
-    const zaloPane = document.querySelector<HTMLElement>('section.pane[data-provider="zalo"]')!;
     expect(tgPane.dataset.active).toBe('true');
     expect(zaloPane.dataset.active).toBe('false');
     expect(zaloPane.dataset.slot).toBe('main');
 
-    // Window blur while Discord iframe is document.activeElement moves data-active="true" to Discord
+    // Window blur while Discord iframe is document.activeElement updates active pane to Discord AND reports windowFocused: false
     const discordPane = document.querySelector<HTMLElement>(
       'section.pane[data-provider="discord"]'
     )!;
     const discordIframe = discordPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     const origActiveEl = Object.getOwnPropertyDescriptor(document, 'activeElement');
     Object.defineProperty(document, 'activeElement', {
       value: discordIframe,
       configurable: true
     });
+    sentRuntime.length = 0;
     window.dispatchEvent(new Event('blur'));
     if (origActiveEl) {
       Object.defineProperty(document, 'activeElement', origActiveEl);
@@ -1094,5 +1141,10 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     }
     expect(discordPane.dataset.active).toBe('true');
     expect(tgPane.dataset.active).toBe('false');
+    expect(sentRuntime).toContainEqual({
+      type: 'WORKSPACE_FOCUS_STATE',
+      windowFocused: false,
+      focusedProvider: 'discord'
+    });
   });
 });

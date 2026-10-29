@@ -120,8 +120,7 @@ function updateMaximizeButtonIcon(btn: HTMLButtonElement, isMaximized: boolean):
 }
 
 function isWorkspaceWindowFocused(): boolean {
-  if (document.visibilityState !== 'visible') return false;
-  return document.hasFocus() || document.activeElement instanceof HTMLIFrameElement;
+  return document.visibilityState === 'visible' && document.hasFocus();
 }
 
 function reportFocusState(): void {
@@ -164,10 +163,25 @@ function applyLayout(): void {
     postSlotMode(providerId, effectiveMain);
   });
 
-  document.getElementById('btn-lite-media')?.classList.toggle('active', prefs.liteMedia);
-  document.getElementById('btn-hide-preview')?.classList.toggle('active', prefs.hidePreview);
-  document.getElementById('btn-dnd')?.classList.toggle('active', prefs.dnd);
-  document.getElementById('btn-pin-topbar')?.classList.toggle('active', prefs.topbarPinned);
+  const syncToggleBtn = (id: string, active: boolean): HTMLElement | null => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.toggle('active', active);
+      el.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+    return el;
+  };
+  syncToggleBtn('btn-lite-media', prefs.liteMedia);
+  syncToggleBtn('btn-hide-preview', prefs.hidePreview);
+  syncToggleBtn('btn-dnd', prefs.dnd);
+  const pinBtn = syncToggleBtn('btn-pin-topbar', prefs.topbarPinned);
+  if (pinBtn) {
+    const pinLabel = prefs.topbarPinned
+      ? 'Bỏ ghim thanh công cụ'
+      : 'Ghim cố định thanh công cụ';
+    pinBtn.title = pinLabel;
+    pinBtn.setAttribute('aria-label', pinLabel);
+  }
 
   reportFocusState();
 }
@@ -229,7 +243,7 @@ function focusProvider(providerId: ProviderId): void {
   }
 }
 
-function toggleMaximize(targetProvider?: ProviderId): void {
+function toggleMaximize(targetProvider?: ProviderId, focusFrame = true): void {
   const candidate = targetProvider ?? activeProvider ?? prefs.slotOrder[0];
   if (maximizedProvider === candidate) {
     maximizedProvider = null;
@@ -242,7 +256,7 @@ function toggleMaximize(targetProvider?: ProviderId): void {
     activeProvider = candidate;
   }
   applyLayout();
-  if (maximizedProvider && !prefs.paused[maximizedProvider]) {
+  if (focusFrame && maximizedProvider && !prefs.paused[maximizedProvider]) {
     panes.get(maximizedProvider)?.iframe.focus();
   }
 }
@@ -315,7 +329,7 @@ function mountPanes(): void {
     maximizeBtn.className = 'icon-btn';
     maximizeBtn.dataset.action = 'maximize';
     updateMaximizeButtonIcon(maximizeBtn, false);
-    maximizeBtn.addEventListener('click', () => toggleMaximize(providerId));
+    maximizeBtn.addEventListener('click', () => toggleMaximize(providerId, false));
 
     const pauseBtn = document.createElement('button');
     pauseBtn.type = 'button';
@@ -435,6 +449,10 @@ function onRuntimeMessage(
     if (Object.hasOwn(PROVIDERS, msg.providerId)) {
       focusProvider(msg.providerId);
     }
+  } else if (msg.type === 'TOGGLE_MAXIMIZE') {
+    toggleMaximize(
+      msg.providerId && Object.hasOwn(PROVIDERS, msg.providerId) ? msg.providerId : undefined
+    );
   } else if (msg.type === 'RELOAD_PROVIDER') {
     if (Object.hasOwn(PROVIDERS, msg.providerId)) {
       reloadProvider(msg.providerId);

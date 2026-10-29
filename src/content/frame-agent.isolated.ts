@@ -4,7 +4,7 @@ import type {
   RuntimeMessage,
   WorkspaceToFrameMessage
 } from '../shared/types';
-import { extractAltShortcutDigit } from '../shared/shortcuts';
+import { extractAltShortcutDigit, isAltMaximizeShortcut } from '../shared/shortcuts';
 import {
   PROVIDER_ORDER,
   PROVIDERS,
@@ -166,6 +166,13 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   };
 
   const onKeyDown = (ev: KeyboardEvent): void => {
+    if (isAltMaximizeShortcut(ev)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.repeat) return;
+      sendToBackground({ type: 'TOGGLE_MAXIMIZE', providerId });
+      return;
+    }
     const digit = extractAltShortcutDigit(ev);
     if (digit === null) return;
     ev.preventDefault();

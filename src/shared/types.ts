@@ -66,6 +66,7 @@ export type RuntimeMessage =
   | { type: 'CLOSE_DUP_TABS' }
   | { type: 'CONSUME_PENDING_CLICK' }
   | { type: 'FOCUS_PROVIDER'; providerId: ProviderId }
+  | { type: 'TOGGLE_MAXIMIZE'; providerId?: ProviderId }
   | { type: 'RELOAD_PROVIDER'; providerId: ProviderId }
   | { type: 'TRIGGER_NOTIFY_CLICK'; providerId: ProviderId; notifToken?: string }
   | { type: 'DUP_TABS_CHANGED'; tabs: ExternalProviderTab[] };

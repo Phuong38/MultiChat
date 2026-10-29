@@ -460,6 +460,22 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
       sendResponse({ ok: true });
       return false;
     }
+    case 'TOGGLE_MAXIMIZE': {
+      if (
+        rawMsg.providerId !== undefined &&
+        (typeof rawMsg.providerId !== 'string' || !Object.hasOwn(PROVIDERS, rawMsg.providerId))
+      ) {
+        sendResponse({ ok: false });
+        return false;
+      }
+      void broadcastToWorkspace(
+        rawMsg.providerId !== undefined
+          ? { type: 'TOGGLE_MAXIMIZE', providerId: rawMsg.providerId }
+          : { type: 'TOGGLE_MAXIMIZE' }
+      );
+      sendResponse({ ok: true });
+      return false;
+    }
     case 'CONSUME_PENDING_CLICK': {
       void (async () => {
         try {

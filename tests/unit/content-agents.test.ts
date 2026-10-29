@@ -530,6 +530,44 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       providerId: 'telegram'
     });
 
+    // Capture-phase Alt+M / macOS Option+M inside iframe forwards TOGGLE_MAXIMIZE (ignores repeat, leaves Escape untouched)
+    sentMessages.length = 0;
+    const maxBubbleSpy = vi.fn();
+    window.addEventListener('keydown', maxBubbleSpy);
+    const maxShortcutEv = new KeyboardEvent('keydown', {
+      altKey: true,
+      code: 'KeyM',
+      key: 'µ',
+      bubbles: true,
+      cancelable: true
+    });
+    window.dispatchEvent(maxShortcutEv);
+    const repeatMaxEv = new KeyboardEvent('keydown', {
+      altKey: true,
+      code: 'KeyM',
+      key: 'µ',
+      repeat: true,
+      bubbles: true,
+      cancelable: true
+    });
+    window.dispatchEvent(repeatMaxEv);
+    window.removeEventListener('keydown', maxBubbleSpy);
+    expect(maxShortcutEv.defaultPrevented).toBe(true);
+    expect(repeatMaxEv.defaultPrevented).toBe(true);
+    expect(maxBubbleSpy).not.toHaveBeenCalled();
+    expect(sentMessages).toEqual([{ type: 'TOGGLE_MAXIMIZE', providerId: 'telegram' }]);
+
+    sentMessages.length = 0;
+    const escEv = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      code: 'Escape',
+      bubbles: true,
+      cancelable: true
+    });
+    window.dispatchEvent(escEv);
+    expect(escEv.defaultPrevented).toBe(false);
+    expect(sentMessages).toHaveLength(0);
+
     // Pointer/focus interaction inside iframe reports FRAME_FOCUSED with 800ms cooldown
     sentMessages.length = 0;
     window.dispatchEvent(new Event('pointerdown', { bubbles: true }));

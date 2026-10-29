@@ -1,4 +1,5 @@
 export function updateWorkspaceFavicon(doc: Document, totalUnread: number): void {
+  const count = Number.isFinite(totalUnread) && totalUnread > 0 ? Math.floor(totalUnread) : 0;
   let link = doc.querySelector<HTMLLinkElement>('link#workspace-favicon');
   if (!link) {
     link = doc.createElement('link');
@@ -8,7 +9,7 @@ export function updateWorkspaceFavicon(doc: Document, totalUnread: number): void
     (doc.head ?? doc.documentElement)?.appendChild(link);
   }
 
-  if (totalUnread <= 0) {
+  if (count <= 0) {
     link.href = 'icons/icon-32.png';
     return;
   }
@@ -51,7 +52,7 @@ export function updateWorkspaceFavicon(doc: Document, totalUnread: number): void
     ctx.fill();
 
     // Red unread counter badge
-    const label = totalUnread > 9 ? '9+' : String(totalUnread);
+    const label = count > 9 ? '9+' : String(count);
     ctx.fillStyle = '#EF4444';
     ctx.beginPath();
     ctx.arc(48, 16, 15, 0, Math.PI * 2);

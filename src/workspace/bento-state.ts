@@ -79,20 +79,6 @@ export function formatSplitRatio(mainWidthPct: number): string {
   return `Chính ${main}% • Phụ ${100 - main}%`;
 }
 
-export interface ShortcutKeyInput {
-  altKey: boolean;
-  ctrlKey: boolean;
-  metaKey: boolean;
-  shiftKey: boolean;
-  code: string;
-  key: string;
-}
-
-export function isAltMaximizeShortcut(ev: ShortcutKeyInput): boolean {
-  if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return false;
-  return ev.code === 'KeyM' || (!ev.code && (ev.key === 'm' || ev.key === 'M'));
-}
-
 export function formatWorkspaceTitle(unreads: Record<ProviderId, number>): string {
   const total = PROVIDER_ORDER.reduce((sum, id) => {
     const val = unreads[id];
@@ -174,4 +160,8 @@ export function sanitizeWorkspacePrefs(raw: unknown): WorkspacePrefs {
   };
 }
 
-export { extractAltShortcutDigit } from '../shared/shortcuts';
+export {
+  extractAltShortcutDigit,
+  isAltMaximizeShortcut,
+  type ShortcutKeyInput
+} from '../shared/shortcuts';

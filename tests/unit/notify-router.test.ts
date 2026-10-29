@@ -635,7 +635,7 @@ describe('MV3 background service-worker', () => {
     })) as { notifId: string | null };
     expect(deliveredOnAppBlur.notifId).toBeTruthy();
 
-    // 3) FOCUS_PROVIDER from iframe content script forwards to workspace
+    // 3) FOCUS_PROVIDER and TOGGLE_MAXIMIZE from iframe content script forward to workspace
     const focusRes = await env.dispatchMessage({
       type: 'FOCUS_PROVIDER',
       providerId: 'telegram'
@@ -645,6 +645,28 @@ describe('MV3 background service-worker', () => {
       type: 'FOCUS_PROVIDER',
       providerId: 'telegram'
     });
+
+    const maxRes = await env.dispatchMessage({
+      type: 'TOGGLE_MAXIMIZE',
+      providerId: 'telegram'
+    });
+    expect(maxRes).toEqual({ ok: true });
+    expect(env.chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'TOGGLE_MAXIMIZE',
+      providerId: 'telegram'
+    });
+
+    const maxDefaultRes = await env.dispatchMessage({ type: 'TOGGLE_MAXIMIZE' });
+    expect(maxDefaultRes).toEqual({ ok: true });
+    expect(env.chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'TOGGLE_MAXIMIZE'
+    });
+
+    const invalidMaxRes = await env.dispatchMessage({
+      type: 'TOGGLE_MAXIMIZE',
+      providerId: 'invalid' as never
+    });
+    expect(invalidMaxRes).toEqual({ ok: false });
 
     // 4) chrome.notifications.create setting runtime.lastError rolls back dedup entry so retry succeeds
     env.chromeMock.notifications.create.mockImplementationOnce((id, _opts, cb) => {
