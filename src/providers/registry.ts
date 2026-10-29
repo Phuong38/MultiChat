@@ -89,12 +89,26 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
   }
 };
 
-const CHAT_LIST_ROW_SELECTORS: Record<ProviderId, string> = {
-  zalo: '.conv-item, .msg-item, [data-chat-item]',
-  messenger: '[role="row"], [role="listitem"], a[href*="/t/"], [data-chat-item]',
-  telegram: '.chatlist-chat, .ListItem.Chat, [data-chat-item]',
-  discord: '[class*="containerDefault"], [role="listitem"], li, a[href*="/channels/"], [data-chat-item]'
+const CHAT_LIST_ROW_SELECTORS: Record<ProviderId, readonly string[]> = {
+  zalo: ['.conv-item', '.msg-item', '[data-chat-item]'],
+  messenger: ['[role="row"]', '[role="listitem"]', 'a[href*="/t/"]', '[data-chat-item]'],
+  telegram: ['.chatlist-chat', '.ListItem.Chat', '[data-chat-item]'],
+  discord: [
+    '[class*="containerDefault"]',
+    '[role="listitem"]',
+    'li',
+    'a[href*="/channels/"]',
+    '[data-chat-item]'
+  ]
 };
+
+function findConversationRow(providerId: ProviderId, el: Element): Element | null {
+  for (const sel of CHAT_LIST_ROW_SELECTORS[providerId]) {
+    const row = el.closest(sel);
+    if (row) return row;
+  }
+  return null;
+}
 
 const SENDER_SELECTORS: Record<ProviderId, string[]> = {
   zalo: ['.conv-item-title__name', '[data-sender]', '.truncate', '[class*="title__name"]'],
@@ -237,7 +251,14 @@ function isMutedOrIgnoredBadge(providerId: ProviderId, el: Element): boolean {
     }
   }
 
-  const row = el.closest(CHAT_LIST_ROW_SELECTORS[providerId]);
+  if (
+    providerId === 'discord' &&
+    el.closest('[class*="modeMuted" i], [aria-label*="muted" i]') !== null
+  ) {
+    return true;
+  }
+
+  const row = findConversationRow(providerId, el);
   return isMutedConversationRow(providerId, row);
 }
 
@@ -300,11 +321,13 @@ export function extractUnreadFromDom(providerId: ProviderId, root: ParentNode): 
 }
 
 export function hasMountedChatList(providerId: ProviderId, root: ParentNode): boolean {
-  try {
-    return root.querySelector(CHAT_LIST_ROW_SELECTORS[providerId]) !== null;
-  } catch {
-    return false;
-  }
+  return CHAT_LIST_ROW_SELECTORS[providerId].some((sel) => {
+    try {
+      return root.querySelector(sel) !== null;
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function resolveProviderUnreadCount(
@@ -312,12 +335,12 @@ export function resolveProviderUnreadCount(
   title: string,
   root: ParentNode | null
 ): number {
-  const domCount = root ? extractUnreadFromDom(providerId, root) : 0;
   if (providerId === 'telegram' && root && hasMountedChatList('telegram', root)) {
-    return domCount;
+    return extractUnreadFromDom('telegram', root);
   }
   const titleCount = parseUnreadFromTitle(providerId, title);
-  return titleCount > 0 ? titleCount : domCount;
+  if (titleCount > 0) return titleCount;
+  return root ? extractUnreadFromDom(providerId, root) : 0;
 }
 
 function cleanPreviewText(raw: string | null | undefined): string {
@@ -356,7 +379,7 @@ export function extractUnreadPreviewFromDom(
 ): UnreadPreview | null {
   const badges = collectUnmutedBadgeElements(providerId, root);
   for (const { element: badgeEl } of badges) {
-    const row = badgeEl.closest(CHAT_LIST_ROW_SELECTORS[providerId]);
+    const row = findConversationRow(providerId, badgeEl);
     if (!row) continue;
     const sender = pickCleanText(row, SENDER_SELECTORS[providerId], badgeEl);
     if (!sender) continue;

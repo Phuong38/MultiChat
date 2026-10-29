@@ -189,7 +189,7 @@ describe('ProviderRegistry', () => {
       snippet: 'Gửi anh hợp đồng bản cuối ạ'
     });
 
-    // Messenger: 1 muted thread + 1 unmuted thread
+    // Messenger: muted threads (including nested <a href="/t/..."> inside role="row") + 1 unmuted thread
     document.body.innerHTML = `
       <div role="row">
         <span data-sender>Nhóm Đã Tắt Chuông</span>
@@ -197,9 +197,18 @@ describe('ProviderRegistry', () => {
         <span data-testid="mwthreadlist-item-unread-badge">4</span>
       </div>
       <div role="row">
-        <span data-sender>Lê Hoàng Nam</span>
+        <a href="/t/123">
+          <span data-sender>Nhóm Muted Anchor</span>
+          <span data-testid="mwthreadlist-item-unread-badge">6</span>
+        </a>
+        <svg aria-label="Muted"></svg>
+      </div>
+      <div role="row">
+        <a href="/t/456">
+          <span data-sender>Lê Hoàng Nam</span>
+          <span data-testid="mwthreadlist-item-unread-badge">1</span>
+        </a>
         <span data-preview>Tối nay họp lúc 20h nha</span>
-        <span data-testid="mwthreadlist-item-unread-badge">1</span>
       </div>
     `;
     expect(extractUnreadFromDom('messenger', document)).toBe(1);
@@ -208,16 +217,32 @@ describe('ProviderRegistry', () => {
       snippet: 'Tối nay họp lúc 20h nha'
     });
 
-    // Discord: 1 modeMuted channel + 1 active channel
+    // Discord: modeMuted channels (including nested <a href="/channels/..."> and wrapper without containerDefault) + 1 active channel
     document.body.innerHTML = `
       <li class="containerDefault modeMuted-3a2">
         <span class="name-3BUD">#random</span>
         <span class="numberBadge-2s8kKX">9</span>
       </li>
+      <li class="containerDefault_1">
+        <div class="modeMuted_1">
+          <a href="/channels/1/2">
+            <span class="name-3BUD">#muted-nested</span>
+            <span class="numberBadge-2s8kKX">7</span>
+          </a>
+        </div>
+      </li>
+      <div class="modeMuted_2">
+        <a href="/channels/1/3">
+          <span class="name-3BUD">#muted-wrapper</span>
+          <span class="numberBadge-2s8kKX">5</span>
+        </a>
+      </div>
       <li class="containerDefault">
-        <span class="name-3BUD">#frontend-review</span>
+        <a href="/channels/1/4">
+          <span class="name-3BUD">#frontend-review</span>
+          <span class="numberBadge-2s8kKX">3</span>
+        </a>
         <span data-preview>@phuong PR #42 xanh hết rồi</span>
-        <span class="numberBadge-2s8kKX">3</span>
       </li>
     `;
     expect(extractUnreadFromDom('discord', document)).toBe(3);
@@ -225,5 +250,13 @@ describe('ProviderRegistry', () => {
       sender: '#frontend-review',
       snippet: '@phuong PR #42 xanh hết rồi'
     });
+
+    // Non-Telegram resolveProviderUnreadCount skips DOM scan when titleCount > 0
+    const spyRoot = {
+      querySelectorAll: () => {
+        throw new Error('DOM should not be scanned when non-Telegram titleCount > 0');
+      }
+    } as unknown as ParentNode;
+    expect(resolveProviderUnreadCount('messenger', '(4) Messenger', spyRoot)).toBe(4);
   });
 });

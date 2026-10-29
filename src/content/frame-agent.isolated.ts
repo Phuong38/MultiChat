@@ -67,7 +67,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   };
 
   const fallbackTracker = new UnreadFallbackTracker(1500, (count) => {
-    const preview = document.body ? extractUnreadPreviewFromDom(providerId, document) : null;
+    const preview = document.body ? extractUnreadPreviewFromDom(providerId, document.body) : null;
     const title = preview?.sender || PROVIDERS[providerId].name;
     const body = preview?.snippet || `Bạn có ${count} tin nhắn chưa đọc`;
     const tag = preview?.sender
