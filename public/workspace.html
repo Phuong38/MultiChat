@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dia Bento Chat Hub</title>
+    <link rel="stylesheet" href="workspace.css" />
+  </head>
+  <body>
+    <header id="topbar">
+      <div class="topbar-left">
+        <span class="brand">Dia Bento Chat</span>
+        <span id="total-unread" class="badge hidden">0</span>
+        <button id="dup-tabs-btn" class="warn-btn hidden" type="button"></button>
+      </div>
+      <div class="topbar-right">
+        <span class="hint">Alt+1..4 doi khung chinh</span>
+        <button id="btn-lite-media" class="toggle-btn" type="button" title="Chan autoplay GIF nang">
+          Lite Media
+        </button>
+        <button id="btn-hide-preview" class="toggle-btn" type="button" title="An noi dung thong bao">
+          An Noi Dung
+        </button>
+        <button id="btn-dnd" class="toggle-btn" type="button" title="Tat thong bao macOS">
+          DND
+        </button>
+        <button id="btn-test-notify" class="action-btn" type="button">Test Notify</button>
+      </div>
+    </header>
+
+    <main id="bento-grid">
+      <div id="grid-resizer" title="Keo de chinh do rong khung chinh"></div>
+    </main>
+
+    <script src="workspace.js"></script>
+  </body>
+</html>
