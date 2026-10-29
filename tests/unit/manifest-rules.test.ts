@@ -27,6 +27,19 @@ describe('Manifest V3 & DNR Rulesets', () => {
     expect(typeof manifest.key).toBe('string');
     const derivedExtId = deriveExtensionIdFromManifestKey(manifest.key);
     expect(derivedExtId).toMatch(/^[a-p]{32}$/);
+    expect(derivedExtId).toBe('ndcplbpbnmkeikikgmpgkaaiefmecmjh');
+    expect(manifest.icons).toEqual({
+      '16': 'icons/icon-16.png',
+      '32': 'icons/icon-32.png',
+      '48': 'icons/icon-48.png',
+      '128': 'icons/icon-128.png'
+    });
+    expect(manifest.action?.default_icon).toEqual({
+      '16': 'icons/icon-16.png',
+      '32': 'icons/icon-32.png',
+      '48': 'icons/icon-48.png',
+      '128': 'icons/icon-128.png'
+    });
 
     expect(manifest.permissions).toEqual(
       expect.arrayContaining([
