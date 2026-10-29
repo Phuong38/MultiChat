@@ -67,10 +67,14 @@ function syncActionBadge(): void {
   const text = total <= 0 ? '' : total > 99 ? '99+' : String(total);
   try {
     if (total > 0) {
-      void chrome.action?.setBadgeBackgroundColor?.({ color: '#EF4444' });
-      void chrome.action?.setBadgeTextColor?.({ color: '#FFFFFF' });
+      void Promise.resolve(
+        chrome.action?.setBadgeBackgroundColor?.({ color: '#EF4444' })
+      ).catch(() => {});
+      void Promise.resolve(chrome.action?.setBadgeTextColor?.({ color: '#FFFFFF' })).catch(
+        () => {}
+      );
     }
-    void chrome.action?.setBadgeText?.({ text });
+    void Promise.resolve(chrome.action?.setBadgeText?.({ text })).catch(() => {});
   } catch {
     // Ignore when action badge API is unavailable
   }
@@ -492,20 +496,32 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
       return true;
     }
     case 'WORKSPACE_FOCUS_STATE': {
-      focusUpdatedInMemory = true;
-      if (typeof sender.tab?.id === 'number') {
-        workspaceTabId = sender.tab.id;
-      }
-      currentWindowFocused = rawMsg.windowFocused;
-      currentFocusedProvider = rawMsg.focusedProvider;
-      const nextFocus = {
-        windowFocused: currentWindowFocused,
-        focusedProvider: currentFocusedProvider
-      };
-      router.setFocusState(nextFocus);
-      void persistSession({ [SW_FOCUS_KEY]: { ...nextFocus, tabId: workspaceTabId } });
-      sendResponse({ ok: true });
-      return false;
+      const validProvider =
+        typeof rawMsg.focusedProvider === 'string' &&
+        Object.hasOwn(PROVIDERS, rawMsg.focusedProvider)
+          ? rawMsg.focusedProvider
+          : null;
+      const validWindowFocused = Boolean(rawMsg.windowFocused);
+      void (async () => {
+        try {
+          await ensureHydrated();
+          focusUpdatedInMemory = true;
+          if (typeof sender.tab?.id === 'number') {
+            workspaceTabId = sender.tab.id;
+          }
+          currentWindowFocused = validWindowFocused;
+          currentFocusedProvider = validProvider;
+          const nextFocus = {
+            windowFocused: currentWindowFocused,
+            focusedProvider: currentFocusedProvider
+          };
+          router.setFocusState(nextFocus);
+          await persistSession({ [SW_FOCUS_KEY]: { ...nextFocus, tabId: workspaceTabId } });
+        } finally {
+          sendResponse({ ok: true });
+        }
+      })();
+      return true;
     }
     case 'SYNC_PREFS': {
       prefsUpdatedInMemory = true;

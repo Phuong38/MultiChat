@@ -103,31 +103,73 @@ describe('ProviderRegistry', () => {
 
   it('excludes muted chats, folder tabs, archive row, and gray badges on Telegram WebK/WebA and ignores muted document.title when chatlist DOM is mounted', () => {
     document.body.innerHTML = `
-      <div class="menu-horizontal-div">
-        <div class="menu-horizontal-div-item"><span>All</span><span class="badge-unread">28</span></div>
+      <div id="column-left" class="tabs-tab chatlist-container">
+        <div class="sidebar-slider">
+          <div class="tabs-tab sidebar-slider-item item-main active">
+            <div id="folders-tabs" class="menu-horizontal-div">
+              <div class="menu-horizontal-div-item"><span>All</span><span class="badge-unread">28</span></div>
+            </div>
+            <div id="search-container" class="sidebar-search">
+              <a class="chatlist-chat" data-peer-id="9991">
+                <span class="peer-title">Search Hit</span>
+                <div class="dialog-subtitle-badge-unread badge-primary is-visible">5</div>
+              </a>
+            </div>
+            <div id="chatlist-container" class="transition-item active">
+              <div id="folders-container">
+                <div class="tabs-tab chatlist-parts active" id="webk-active-folder">
+                  <ul class="chatlist" id="webk-active-list">
+                    <a class="chatlist-chat" data-peer-id="0">
+                      <span class="peer-title">Archived Chats</span>
+                      <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread badge-gray is-visible">15</div>
+                    </a>
+                    <a class="chatlist-chat is-muted" data-peer-id="-1001">
+                      <span class="peer-title">Muted Crypto Group</span>
+                      <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread badge-gray is-visible">9</div>
+                    </a>
+                    <a class="chatlist-chat" data-peer-id="-1002">
+                      <span class="peer-title">Muted Dev Channel <span class="dialog-muted-icon"></span></span>
+                      <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread is-visible">4</div>
+                    </a>
+                    <a class="chatlist-chat" data-peer-id="-1003">
+                      <span class="peer-title">Gray Theme Muted</span>
+                      <div id="computed-gray-badge" class="dialog-subtitle-badge badge-unread is-visible" style="background-color: rgb(113, 117, 121);">6</div>
+                    </a>
+                    <a class="chatlist-chat" data-peer-id="2001">
+                      <span class="peer-title">Read Hidden Badge</span>
+                      <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary hide">3</div>
+                    </a>
+                  </ul>
+                </div>
+                <div class="tabs-tab chatlist-parts">
+                  <ul class="chatlist">
+                    <a class="chatlist-chat" data-peer-id="4001">
+                      <span class="peer-title">Inactive Folder Unmuted</span>
+                      <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary is-visible" style="background-color: rgb(51, 144, 236);">8</div>
+                    </a>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div class="transition-item">
+              <ul class="chatlist">
+                <a class="chatlist-chat" data-peer-id="4002">
+                  <span class="peer-title">Inactive Transition Unmuted</span>
+                  <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary is-visible">7</div>
+                </a>
+              </ul>
+            </div>
+          </div>
+          <div class="tabs-tab sidebar-slider-item app-sidebar-archive active">
+            <ul class="chatlist">
+              <a class="chatlist-chat" data-peer-id="5001">
+                <span class="peer-title">Secondary Archive Slider</span>
+                <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary is-visible" style="background-color: rgb(51, 144, 236);">11</div>
+              </a>
+            </ul>
+          </div>
+        </div>
       </div>
-      <ul class="chatlist">
-        <a class="chatlist-chat" data-peer-id="0">
-          <span class="peer-title">Archived Chats</span>
-          <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread badge-gray is-visible">15</div>
-        </a>
-        <a class="chatlist-chat is-muted" data-peer-id="-1001">
-          <span class="peer-title">Muted Crypto Group</span>
-          <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread badge-gray is-visible">9</div>
-        </a>
-        <a class="chatlist-chat" data-peer-id="-1002">
-          <span class="peer-title">Muted Dev Channel <span class="dialog-muted-icon"></span></span>
-          <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread is-visible">4</div>
-        </a>
-        <a class="chatlist-chat" data-peer-id="-1003">
-          <span class="peer-title">Gray Theme Muted</span>
-          <div id="computed-gray-badge" class="dialog-subtitle-badge badge-unread is-visible" style="background-color: rgb(113, 117, 121);">6</div>
-        </a>
-        <a class="chatlist-chat" data-peer-id="2001">
-          <span class="peer-title">Read Hidden Badge</span>
-          <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary hide">3</div>
-        </a>
-      </ul>
     `;
 
     expect(hasMountedChatList('telegram', document)).toBe(true);
@@ -136,8 +178,8 @@ describe('ProviderRegistry', () => {
     expect(resolveProviderUnreadCount('telegram', '(28) Telegram', document)).toBe(0);
     expect(extractUnreadPreviewFromDom('telegram', document)).toBeNull();
 
-    // Now add 1 genuinely unmuted Telegram WebK chat and 1 unmuted WebA chat (plus 1 muted WebA chat)
-    document.body.insertAdjacentHTML(
+    // Add 1 genuinely unmuted WebK chat AND a second .active transition folder panel with the SAME data-peer-id="3001"
+    document.getElementById('webk-active-list')!.insertAdjacentHTML(
       'beforeend',
       `
       <a class="chatlist-chat" data-peer-id="3001">
@@ -149,21 +191,81 @@ describe('ProviderRegistry', () => {
           </p>
         </div>
       </a>
-      <div class="ListItem Chat muted">
-        <div class="ChatBadge unread muted">7</div>
-      </div>
-      <div class="ListItem Chat">
-        <div class="title"><h3>Team Infra</h3></div>
-        <div class="subtitle"><span class="last-message">Deploy xong prod</span><div class="ChatBadge unread">1</div></div>
+      `
+    );
+    document.getElementById('folders-container')!.insertAdjacentHTML(
+      'beforeend',
+      `
+      <div class="tabs-tab chatlist-parts active">
+        <ul class="chatlist">
+          <a class="chatlist-chat" data-peer-id="3001">
+            <div class="user-caption">
+              <p class="dialog-title"><span class="peer-title">Nguyễn Minh Tuấn</span></p>
+              <p class="dialog-subtitle">
+                <span class="dialog-subtitle-span">Anh ơi chốt bản thiết kế chiều nay nhé!</span>
+                <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary is-visible" style="background-color: rgb(51, 144, 236);">2</div>
+              </p>
+            </div>
+          </a>
+        </ul>
       </div>
       `
     );
 
-    expect(extractUnreadFromDom('telegram', document)).toBe(3);
-    expect(resolveProviderUnreadCount('telegram', '(31) Telegram', document)).toBe(3);
+    expect(extractUnreadFromDom('telegram', document)).toBe(2);
+    expect(resolveProviderUnreadCount('telegram', '(30) Telegram', document)).toBe(2);
     expect(extractUnreadPreviewFromDom('telegram', document)).toEqual({
       sender: 'Nguyễn Minh Tuấn',
       snippet: 'Anh ơi chốt bản thiết kế chiều nay nhé!'
+    });
+
+    // Realistic Telegram WebA hierarchy (.ChatFolders wrapping .TabList + .Transition slides)
+    document.body.innerHTML = `
+      <div class="ChatFolders">
+        <div class="TabList">
+          <div class="Tab">
+            <span>All</span>
+            <span class="badge">19</span>
+            <span class="ChatBadge unread">19</span>
+          </div>
+        </div>
+        <div class="Transition">
+          <div class="Transition_slide Transition_slide-active">
+            <div class="ChatList">
+              <div class="ListItem Chat muted">
+                <div class="title"><h3>Muted Group</h3></div>
+                <div class="ChatBadge unread muted">7</div>
+              </div>
+              <div class="ListItem Chat">
+                <div class="title"><h3>Team Infra</h3></div>
+                <div class="subtitle">
+                  <span class="last-message">Deploy xong prod</span>
+                  <div class="ChatBadge unread">3</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="Transition_slide Transition_slide-inactive">
+            <div class="ChatList">
+              <div class="ListItem Chat">
+                <div class="title"><h3>Inactive Slide Chat</h3></div>
+                <div class="subtitle">
+                  <span class="last-message">Old folder slide</span>
+                  <div class="ChatBadge unread">5</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    expect(hasMountedChatList('telegram', document)).toBe(true);
+    expect(extractUnreadFromDom('telegram', document)).toBe(3);
+    expect(resolveProviderUnreadCount('telegram', '(29) Telegram', document)).toBe(3);
+    expect(extractUnreadPreviewFromDom('telegram', document)).toEqual({
+      sender: 'Team Infra',
+      snippet: 'Deploy xong prod'
     });
   });
 

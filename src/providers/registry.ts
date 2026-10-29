@@ -241,7 +241,7 @@ function isMutedOrIgnoredBadge(providerId: ProviderId, el: Element): boolean {
   if (providerId === 'telegram') {
     if (
       el.closest(
-        '.menu-horizontal-div, .tabs-tab, #folders-tabs, .ChatFolders, .Tab, [role="tablist"], [data-peer-id="0"], .is-archive'
+        '.menu-horizontal-div, #folders-tabs, #folders-sidebar, .folders-sidebar, .TabList, .Tab, [role="tablist"], [role="tab"], [data-peer-id="0"], .is-archive, #search-container, .sidebar-search, .sidebar-slider-item:not(.item-main), #folders-container > .tabs-tab:not(.active), .transition-item:not(.active), .Transition_slide-inactive'
       ) !== null
     ) {
       return true;
@@ -290,6 +290,7 @@ function collectUnmutedBadgeElements(
   const selectors = PROVIDERS[providerId].badgeSelectors;
   const results: Array<{ element: Element; count: number }> = [];
   const seen = new Set<Element>();
+  const seenPeerIds = new Set<string>();
   const counted: Element[] = [];
 
   for (const selector of selectors) {
@@ -306,8 +307,15 @@ function collectUnmutedBadgeElements(
       if (counted.some((prev) => prev.contains(el) || el.contains(prev))) {
         continue;
       }
+      const peerId = findConversationRow(providerId, el)?.getAttribute('data-peer-id')?.trim();
+      if (peerId && seenPeerIds.has(peerId)) {
+        continue;
+      }
       const num = parseUnreadFromElement(el);
       if (num > 0) {
+        if (peerId) {
+          seenPeerIds.add(peerId);
+        }
         counted.push(el);
         results.push({ element: el, count: num });
       }

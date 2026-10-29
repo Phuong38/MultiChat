@@ -11,6 +11,11 @@ export function updateWorkspaceFavicon(doc: Document, totalUnread: number): void
 
   if (count <= 0) {
     link.href = 'icons/icon-32.png';
+    link.dataset.unreadCount = '0';
+    return;
+  }
+
+  if (link.dataset.unreadCount === String(count) && link.getAttribute('href')) {
     return;
   }
 
@@ -21,6 +26,7 @@ export function updateWorkspaceFavicon(doc: Document, totalUnread: number): void
     const ctx = canvas.getContext('2d');
     if (!ctx) {
       link.href = 'icons/icon-32.png';
+      delete link.dataset.unreadCount;
       return;
     }
 
@@ -68,7 +74,9 @@ export function updateWorkspaceFavicon(doc: Document, totalUnread: number): void
     ctx.fillText(label, 48, 17);
 
     link.href = canvas.toDataURL('image/png');
+    link.dataset.unreadCount = String(count);
   } catch {
     link.href = 'icons/icon-32.png';
+    delete link.dataset.unreadCount;
   }
 }

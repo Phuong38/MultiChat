@@ -34,6 +34,7 @@ describe('Manifest V3 & DNR Rulesets', () => {
       '48': 'icons/icon-48.png',
       '128': 'icons/icon-128.png'
     });
+    expect(manifest.action?.default_title).toBe('Mở Dia MultiChat Hub');
     expect(manifest.action?.default_icon).toEqual({
       '16': 'icons/icon-16.png',
       '32': 'icons/icon-32.png',

@@ -394,7 +394,9 @@ describe('BentoState pure functions', () => {
       fillText
     } as unknown as CanvasRenderingContext2D;
 
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(mockCtx as never);
+    const getContextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(mockCtx as never);
     vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
       'data:image/png;base64,bW9ja2Zhdmljb24='
     );
@@ -405,7 +407,10 @@ describe('BentoState pure functions', () => {
     expect(fillText).toHaveBeenCalledWith('4', 48, 17);
     expect(link.getAttribute('href')).toBe('data:image/png;base64,bW9ja2Zhdmljb24=');
 
+    getContextSpy.mockClear();
     updateWorkspaceFavicon(document, 3.9);
+    updateWorkspaceFavicon(document, 3);
+    expect(getContextSpy).toHaveBeenCalledTimes(1);
     expect(fillText).toHaveBeenLastCalledWith('3', 48, 17);
 
     updateWorkspaceFavicon(document, 14);

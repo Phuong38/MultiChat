@@ -839,4 +839,81 @@ describe('MV3 background service-worker', () => {
     await envRestart2.dispatchMessage({ type: 'UNREAD_UPDATE', providerId: 'zalo', count: 0 });
     expect(envRestart2.chromeMock.action.setBadgeText).toHaveBeenLastCalledWith({ text: '' });
   });
+
+  it('preserves FIFO focus ordering between FRAME_FOCUSED and WORKSPACE_FOCUS_STATE during cold SW hydration, validates focusedProvider, and swallows badge API rejections', async () => {
+    const sharedSession: Record<string, unknown> = {
+      __dia_sw_focus: { windowFocused: true, focusedProvider: 'discord', tabId: 10 }
+    };
+    const env = createChromeMock(sharedSession);
+    env.chromeMock.tabs.query.mockResolvedValue([
+      { id: 10, windowId: 1, active: true, url: 'chrome-extension://ext-id/workspace.html' }
+    ]);
+    env.chromeMock.windows.get.mockResolvedValue({ id: 1, focused: true });
+
+    let resolveHydration!: () => void;
+    const rawSessionGet = env.chromeMock.storage.session.get;
+    env.chromeMock.storage.session.get = vi.fn(async (keys: string[]) => {
+      await new Promise<void>((resolve) => {
+        resolveHydration = resolve;
+      });
+      return rawSessionGet(keys);
+    });
+
+    vi.stubGlobal('chrome', env.chromeMock);
+    await import('../../src/background/service-worker');
+
+    // Back-to-back FRAME_FOCUSED ('telegram') followed by WORKSPACE_FOCUS_STATE ('zalo') while session.get is pending
+    const frameFocusedPromise = env.dispatchMessage(
+      { type: 'FRAME_FOCUSED', providerId: 'telegram' },
+      { tab: { id: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender
+    );
+    const workspaceFocusPromise = env.dispatchMessage(
+      { type: 'WORKSPACE_FOCUS_STATE', windowFocused: true, focusedProvider: 'zalo' },
+      { tab: { id: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender
+    );
+
+    resolveHydration();
+    const [res1, res2] = await Promise.all([frameFocusedPromise, workspaceFocusPromise]);
+    expect(res1).toEqual({ ok: true });
+    expect(res2).toEqual({ ok: true });
+
+    // 'zalo' arrived second so it MUST win (not clobbered by earlier 'telegram' or stale 'discord')
+    const zaloSuppressed = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'zalo', title: 'Zalo Contact', body: 'In focused pane' }
+    })) as { notifId: string | null };
+    expect(zaloSuppressed.notifId).toBeNull();
+
+    const tgDelivered = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'telegram', title: 'TG Contact', body: 'Should notify' }
+    })) as { notifId: string | null };
+    expect(tgDelivered.notifId).toBeTruthy();
+
+    // Invalid focusedProvider is sanitized to null
+    await env.dispatchMessage(
+      {
+        type: 'WORKSPACE_FOCUS_STATE',
+        windowFocused: true,
+        focusedProvider: 'unknown_provider' as never
+      },
+      { tab: { id: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender
+    );
+    const zaloAfterInvalid = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'zalo', title: 'Zalo Contact', body: 'No valid focused pane' }
+    })) as { notifId: string | null };
+    expect(zaloAfterInvalid.notifId).toBeTruthy();
+
+    // Rejected chrome.action badge promises during SW shutdown do not surface as unhandled rejections
+    env.chromeMock.action.setBadgeBackgroundColor.mockRejectedValueOnce(new Error('SW shutting down'));
+    env.chromeMock.action.setBadgeTextColor.mockRejectedValueOnce(new Error('SW shutting down'));
+    env.chromeMock.action.setBadgeText.mockRejectedValueOnce(new Error('SW shutting down'));
+    const unreadRes = await env.dispatchMessage({
+      type: 'UNREAD_UPDATE',
+      providerId: 'zalo',
+      count: 5
+    });
+    expect(unreadRes).toEqual({ ok: true });
+  });
 });

@@ -512,14 +512,15 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
       .toBe('');
 
     await telegramFrame.evaluate(() => {
-      let list = document.getElementById('tg-chatlist');
-      if (!list) {
-        list = document.createElement('div');
-        list.id = 'tg-chatlist';
-        document.body.appendChild(list);
+      let root = document.getElementById('column-left');
+      if (!root) {
+        root = document.createElement('div');
+        root.id = 'column-left';
+        root.className = 'tabs-tab chatlist-container';
+        document.body.appendChild(root);
       }
-      list.innerHTML =
-        '<a class="chatlist-chat is-muted"><span class="peer-title">Muted Group</span><div class="dialog-subtitle-badge-unread badge-gray is-visible">19</div></a>';
+      root.innerHTML =
+        '<div class="sidebar-slider"><div class="tabs-tab sidebar-slider-item item-main active"><div id="folders-tabs" class="menu-horizontal-div"><div class="menu-horizontal-div-item"><span class="badge badge-primary">19</span></div></div><div id="chatlist-container" class="transition-item active"><div id="folders-container"><div class="tabs-tab chatlist-parts active"><ul class="chatlist" id="tg-list"><a class="chatlist-chat is-muted" data-peer-id="-1001"><span class="peer-title">Muted Group</span><div class="dialog-subtitle-badge-unread badge-gray is-visible">19</div></a></ul></div></div></div></div></div>';
       document.title = '(19) Telegram';
     });
 
@@ -534,10 +535,10 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
     expect(await sw.evaluate(() => chrome.action.getBadgeText({}))).toBe('');
 
     await telegramFrame.evaluate(() => {
-      const list = document.getElementById('tg-chatlist')!;
+      const list = document.getElementById('tg-list')!;
       list.insertAdjacentHTML(
         'beforeend',
-        '<a class="chatlist-chat"><span class="peer-title">Nguyễn Minh Tuấn</span><span class="dialog-subtitle-span">Chốt bản release nhé</span><div class="dialog-subtitle-badge-unread badge-primary is-visible" style="background-color: rgb(51, 144, 236);">2</div></a>'
+        '<a class="chatlist-chat" data-peer-id="3001"><span class="peer-title">Nguyễn Minh Tuấn</span><span class="dialog-subtitle-span">Chốt bản release nhé</span><div class="dialog-subtitle-badge-unread badge-primary is-visible" style="background-color: rgb(51, 144, 236);">2</div></a>'
       );
     });
 
