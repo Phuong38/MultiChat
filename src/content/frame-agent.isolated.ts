@@ -14,6 +14,21 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
 
 (() => {
   if (window === window.top) return;
+  if (window.parent !== window.top) return;
+  const runtimeId = globalThis.chrome?.runtime?.id;
+  const expectedExtensionOrigin =
+    typeof runtimeId === 'string' && runtimeId.length > 0
+      ? `chrome-extension://${runtimeId}`
+      : null;
+  const ancestors = window.location.ancestorOrigins;
+  if (ancestors && ancestors.length > 0) {
+    const parentOrigin = ancestors[0];
+    if (expectedExtensionOrigin) {
+      if (parentOrigin !== expectedExtensionOrigin) return;
+    } else if (!parentOrigin?.startsWith('chrome-extension://')) {
+      return;
+    }
+  }
 
   const providerId = matchProviderByUrl(window.location.href);
   if (!providerId) return;
@@ -103,6 +118,15 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   };
 
   const onWindowMessage = (ev: MessageEvent): void => {
+    if (ev.origin) {
+      if (
+        expectedExtensionOrigin
+          ? ev.origin !== expectedExtensionOrigin
+          : !ev.origin.startsWith('chrome-extension://')
+      ) {
+        return;
+      }
+    }
     const data = ev.data as
       | WorkspaceToFrameMessage
       | { source?: unknown; type?: unknown; providerId?: unknown; isMain?: unknown; notifToken?: unknown }

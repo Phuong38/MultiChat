@@ -204,7 +204,12 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
   let savedRaf: typeof window.requestAnimationFrame;
   let savedCaf: typeof window.cancelAnimationFrame;
   const initialTopDescriptor = Object.getOwnPropertyDescriptor(window, 'top');
+  const initialParentDescriptor = Object.getOwnPropertyDescriptor(window, 'parent');
   const initialReadyStateDescriptor = Object.getOwnPropertyDescriptor(document, 'readyState');
+  const initialAncestorOriginsDescriptor = Object.getOwnPropertyDescriptor(
+    window.location,
+    'ancestorOrigins'
+  );
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -229,6 +234,14 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
     if (initialTopDescriptor) {
       Object.defineProperty(window, 'top', initialTopDescriptor);
     }
+    if (initialParentDescriptor) {
+      Object.defineProperty(window, 'parent', initialParentDescriptor);
+    }
+    if (initialAncestorOriginsDescriptor) {
+      Object.defineProperty(window.location, 'ancestorOrigins', initialAncestorOriginsDescriptor);
+    } else {
+      Reflect.deleteProperty(window.location, 'ancestorOrigins');
+    }
     if (initialReadyStateDescriptor) {
       Object.defineProperty(document, 'readyState', initialReadyStateDescriptor);
     } else {
@@ -242,7 +255,7 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
   it('does nothing on normal top-level tabs when window === window.top', async () => {
     const sendMessage = vi.fn();
     vi.stubGlobal('chrome', {
-      runtime: { sendMessage, lastError: undefined }
+      runtime: { id: 'dia-ext-id', sendMessage, lastError: undefined }
     });
 
     await import('../../src/content/notify-hook.main');
@@ -254,10 +267,74 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it('does nothing inside grandchild sub-iframes when window.parent !== window.top', async () => {
+    const sendMessage = vi.fn();
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'dia-ext-id', sendMessage, lastError: undefined }
+    });
+
+    Object.defineProperty(window, 'top', {
+      value: {} as Window,
+      configurable: true
+    });
+    Object.defineProperty(window, 'parent', {
+      value: {} as Window,
+      configurable: true
+    });
+
+    await import('../../src/content/notify-hook.main');
+    await import('../../src/content/frame-agent.isolated');
+
+    expect(window.Notification).toBe(savedNotification);
+    expect(window.requestAnimationFrame).toBe(savedRaf);
+    expect(document.getElementById('dia-sub-diet')).toBeNull();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does nothing inside third-party web embeds when ancestorOrigins is not the extension origin', async () => {
+    const sendMessage = vi.fn();
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'dia-ext-id', sendMessage, lastError: undefined }
+    });
+
+    const fakeTop = {} as Window;
+    Object.defineProperty(window, 'top', {
+      value: fakeTop,
+      configurable: true
+    });
+    Object.defineProperty(window, 'parent', {
+      value: fakeTop,
+      configurable: true
+    });
+    Object.defineProperty(window.location, 'ancestorOrigins', {
+      value: ['https://example.com'] as unknown as DOMStringList,
+      configurable: true
+    });
+
+    await import('../../src/content/notify-hook.main');
+    await import('../../src/content/frame-agent.isolated');
+
+    expect(window.Notification).toBe(savedNotification);
+    expect(window.requestAnimationFrame).toBe(savedRaf);
+    expect(document.getElementById('dia-sub-diet')).toBeNull();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    // Also reject another extension's origin in frame-agent.isolated when chrome.runtime.id is present
+    vi.resetModules();
+    Object.defineProperty(window.location, 'ancestorOrigins', {
+      value: ['chrome-extension://other-ext-id'] as unknown as DOMStringList,
+      configurable: true
+    });
+    await import('../../src/content/frame-agent.isolated');
+    expect(document.getElementById('dia-sub-diet')).toBeNull();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('bridges MAIN and ISOLATED worlds inside an iframe across DOMContentLoaded, slot mode, hover, notifications, and unread polling', async () => {
     const sentMessages: RuntimeMessage[] = [];
     vi.stubGlobal('chrome', {
       runtime: {
+        id: 'dia-ext-id',
         sendMessage: vi.fn((msg: RuntimeMessage, cb?: () => void) => {
           sentMessages.push(msg);
           cb?.();
@@ -266,8 +343,17 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       }
     });
 
+    const fakeWorkspaceWin = {} as Window;
     Object.defineProperty(window, 'top', {
-      value: {} as Window,
+      value: fakeWorkspaceWin,
+      configurable: true
+    });
+    Object.defineProperty(window, 'parent', {
+      value: fakeWorkspaceWin,
+      configurable: true
+    });
+    Object.defineProperty(window.location, 'ancestorOrigins', {
+      value: ['chrome-extension://dia-ext-id'] as unknown as DOMStringList,
       configurable: true
     });
     Object.defineProperty(document, 'readyState', {
@@ -323,9 +409,24 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
     vi.advanceTimersByTime(460);
     expect(rafCb).toHaveBeenCalledTimes(3);
 
+    // Untrusted non-extension postMessage origin cannot spoof DIA_SLOT_MODE
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: 'https://web.telegram.org',
+        data: {
+          source: 'dia-bento-workspace',
+          type: 'DIA_SLOT_MODE',
+          providerId: 'telegram',
+          isMain: true
+        }
+      })
+    );
+    expect(document.getElementById('dia-sub-diet')).not.toBeNull();
+
     // Workspace promotes telegram to MAIN slot via postMessage
     window.dispatchEvent(
       new MessageEvent('message', {
+        origin: 'chrome-extension://dia-ext-id',
         data: {
           source: 'dia-bento-workspace',
           type: 'DIA_SLOT_MODE',
@@ -416,8 +517,13 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       }
     });
 
+    const fakeWorkspaceWin = {} as Window;
     Object.defineProperty(window, 'top', {
-      value: {} as Window,
+      value: fakeWorkspaceWin,
+      configurable: true
+    });
+    Object.defineProperty(window, 'parent', {
+      value: fakeWorkspaceWin,
       configurable: true
     });
     Object.defineProperty(document, 'readyState', {

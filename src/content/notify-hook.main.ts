@@ -3,6 +3,11 @@ import { installNotificationHook, installRafGovernor } from './raf-governor';
 
 (() => {
   if (window === window.top) return;
+  if (window.parent !== window.top) return;
+  const ancestors = window.location.ancestorOrigins;
+  if (ancestors && ancestors.length > 0 && !ancestors[0]?.startsWith('chrome-extension://')) {
+    return;
+  }
 
   const MAIN_TO_ISO = '__dia_main_to_iso__';
   const ISO_TO_MAIN = '__dia_iso_to_main__';
