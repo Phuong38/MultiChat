@@ -8,9 +8,9 @@ import { extractAltShortcutDigit } from '../shared/shortcuts';
 import {
   PROVIDER_ORDER,
   PROVIDERS,
-  extractUnreadFromDom,
+  extractUnreadPreviewFromDom,
   matchProviderByUrl,
-  parseUnreadFromTitle
+  resolveProviderUnreadCount
 } from '../providers/registry';
 import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
 
@@ -43,6 +43,8 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   let lastReportedUnread = -1;
   let domBooted = false;
   let observer: MutationObserver | null = null;
+  let bodyObserver: MutationObserver | null = null;
+  let bodyDebounceTimer: number | null = null;
   let pollTimer: number | null = null;
   let rawNotifySyncTimer: number | null = null;
 
@@ -65,21 +67,29 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   };
 
   const fallbackTracker = new UnreadFallbackTracker(1500, (count) => {
+    const preview = document.body ? extractUnreadPreviewFromDom(providerId, document) : null;
+    const title = preview?.sender || PROVIDERS[providerId].name;
+    const body = preview?.snippet || `Bạn có ${count} tin nhắn chưa đọc`;
+    const tag = preview?.sender
+      ? `fallback-${providerId}-${preview.sender}${preview.snippet ? `-${preview.snippet.slice(0, 24)}` : ''}`
+      : `fallback-${providerId}`;
     sendToBackground({
       type: 'CHAT_NOTIFY',
       payload: {
         providerId,
-        title: PROVIDERS[providerId].name,
-        body: `Ban co ${count} tin nhan chua doc`,
-        tag: `fallback-${providerId}`
+        title,
+        body,
+        tag
       }
     });
   });
 
   const evaluateUnread = (): void => {
-    const titleCount = parseUnreadFromTitle(providerId, document.title || '');
-    const domCount = document.body ? extractUnreadFromDom(providerId, document) : 0;
-    const count = titleCount > 0 ? titleCount : domCount;
+    const count = resolveProviderUnreadCount(
+      providerId,
+      document.title || '',
+      document.body ?? null
+    );
     if (count !== lastReportedUnread) {
       lastReportedUnread = count;
       sendToBackground({ type: 'UNREAD_UPDATE', providerId, count });
@@ -194,6 +204,20 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     if (titleEl && (!observeRoot || !observeRoot.contains(titleEl))) {
       observer.observe(titleEl, { subtree: true, childList: true, characterData: true });
     }
+    if (document.body) {
+      bodyObserver = new MutationObserver(() => {
+        if (bodyDebounceTimer !== null) return;
+        bodyDebounceTimer = window.setTimeout(() => {
+          bodyDebounceTimer = null;
+          evaluateUnread();
+        }, 200);
+      });
+      bodyObserver.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true
+      });
+    }
     pollTimer = window.setInterval(evaluateUnread, 3000);
   };
 
@@ -217,6 +241,12 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
       document.documentElement?.removeEventListener('mouseleave', onMouseLeave);
       observer?.disconnect();
       observer = null;
+      bodyObserver?.disconnect();
+      bodyObserver = null;
+      if (bodyDebounceTimer !== null) {
+        window.clearTimeout(bodyDebounceTimer);
+        bodyDebounceTimer = null;
+      }
       if (pollTimer !== null) {
         window.clearInterval(pollTimer);
         pollTimer = null;

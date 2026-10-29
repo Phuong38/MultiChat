@@ -4,8 +4,11 @@ import {
   PROVIDER_ORDER,
   PROVIDERS,
   extractUnreadFromDom,
+  extractUnreadPreviewFromDom,
+  hasMountedChatList,
   matchProviderByUrl,
-  parseUnreadFromTitle
+  parseUnreadFromTitle,
+  resolveProviderUnreadCount
 } from '../../src/providers/registry';
 
 describe('ProviderRegistry', () => {
@@ -96,5 +99,131 @@ describe('ProviderRegistry', () => {
     expect(matchProviderByUrl('https://notdiscord.com/app')).toBeNull();
     expect(matchProviderByUrl('https://google.com')).toBeNull();
     expect(matchProviderByUrl('not-a-valid-url')).toBeNull();
+  });
+
+  it('excludes muted chats, folder tabs, archive row, and gray badges on Telegram WebK/WebA and ignores muted document.title when chatlist DOM is mounted', () => {
+    document.body.innerHTML = `
+      <div class="menu-horizontal-div">
+        <div class="menu-horizontal-div-item"><span>All</span><span class="badge-unread">28</span></div>
+      </div>
+      <ul class="chatlist">
+        <a class="chatlist-chat" data-peer-id="0">
+          <span class="peer-title">Archived Chats</span>
+          <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread badge-gray is-visible">15</div>
+        </a>
+        <a class="chatlist-chat is-muted" data-peer-id="-1001">
+          <span class="peer-title">Muted Crypto Group</span>
+          <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread badge-gray is-visible">9</div>
+        </a>
+        <a class="chatlist-chat" data-peer-id="-1002">
+          <span class="peer-title">Muted Dev Channel <span class="dialog-muted-icon"></span></span>
+          <div class="dialog-subtitle-badge badge badge-24 dialog-subtitle-badge-unread is-visible">4</div>
+        </a>
+        <a class="chatlist-chat" data-peer-id="-1003">
+          <span class="peer-title">Gray Theme Muted</span>
+          <div id="computed-gray-badge" class="dialog-subtitle-badge badge-unread is-visible" style="background-color: rgb(113, 117, 121);">6</div>
+        </a>
+        <a class="chatlist-chat" data-peer-id="2001">
+          <span class="peer-title">Read Hidden Badge</span>
+          <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary hide">3</div>
+        </a>
+      </ul>
+    `;
+
+    expect(hasMountedChatList('telegram', document)).toBe(true);
+    expect(extractUnreadFromDom('telegram', document)).toBe(0);
+    // Telegram default cloud setting puts muted count (28) into document.title; mounted chatlist overrides it to 0!
+    expect(resolveProviderUnreadCount('telegram', '(28) Telegram', document)).toBe(0);
+    expect(extractUnreadPreviewFromDom('telegram', document)).toBeNull();
+
+    // Now add 1 genuinely unmuted Telegram WebK chat and 1 unmuted WebA chat (plus 1 muted WebA chat)
+    document.body.insertAdjacentHTML(
+      'beforeend',
+      `
+      <a class="chatlist-chat" data-peer-id="3001">
+        <div class="user-caption">
+          <p class="dialog-title"><span class="peer-title">Nguyễn Minh Tuấn</span></p>
+          <p class="dialog-subtitle">
+            <span class="dialog-subtitle-span">Anh ơi chốt bản thiết kế chiều nay nhé!</span>
+            <div class="dialog-subtitle-badge dialog-subtitle-badge-unread badge-primary is-visible" style="background-color: rgb(51, 144, 236);">2</div>
+          </p>
+        </div>
+      </a>
+      <div class="ListItem Chat muted">
+        <div class="ChatBadge unread muted">7</div>
+      </div>
+      <div class="ListItem Chat">
+        <div class="title"><h3>Team Infra</h3></div>
+        <div class="subtitle"><span class="last-message">Deploy xong prod</span><div class="ChatBadge unread">1</div></div>
+      </div>
+      `
+    );
+
+    expect(extractUnreadFromDom('telegram', document)).toBe(3);
+    expect(resolveProviderUnreadCount('telegram', '(31) Telegram', document)).toBe(3);
+    expect(extractUnreadPreviewFromDom('telegram', document)).toEqual({
+      sender: 'Nguyễn Minh Tuấn',
+      snippet: 'Anh ơi chốt bản thiết kế chiều nay nhé!'
+    });
+  });
+
+  it('excludes muted conversation rows across Zalo, Messenger, and Discord and extracts Vietnamese sender + snippet from unmuted rows', () => {
+    // Zalo: 1 muted group + 1 active unmuted contact
+    document.body.innerHTML = `
+      <div class="msg-item conv-item">
+        <div class="conv-item-title__name">Nhóm Quảng Cáo</div>
+        <i class="fa-Mute"></i>
+        <div class="conv-item-body__main">Khuyến mãi cuối tuần</div>
+        <div class="conv-item-title__unread">5</div>
+      </div>
+      <div class="msg-item conv-item">
+        <div class="conv-item-title__name">Trần Thu Hà</div>
+        <div class="conv-item-body__main">Gửi anh hợp đồng bản cuối ạ</div>
+        <span class="conv-item-title__more">10:42</span>
+        <div class="conv-item-title__unread">2</div>
+      </div>
+    `;
+    expect(extractUnreadFromDom('zalo', document)).toBe(2);
+    expect(extractUnreadPreviewFromDom('zalo', document)).toEqual({
+      sender: 'Trần Thu Hà',
+      snippet: 'Gửi anh hợp đồng bản cuối ạ'
+    });
+
+    // Messenger: 1 muted thread + 1 unmuted thread
+    document.body.innerHTML = `
+      <div role="row">
+        <span data-sender>Nhóm Đã Tắt Chuông</span>
+        <svg aria-label="Muted"></svg>
+        <span data-testid="mwthreadlist-item-unread-badge">4</span>
+      </div>
+      <div role="row">
+        <span data-sender>Lê Hoàng Nam</span>
+        <span data-preview>Tối nay họp lúc 20h nha</span>
+        <span data-testid="mwthreadlist-item-unread-badge">1</span>
+      </div>
+    `;
+    expect(extractUnreadFromDom('messenger', document)).toBe(1);
+    expect(extractUnreadPreviewFromDom('messenger', document)).toEqual({
+      sender: 'Lê Hoàng Nam',
+      snippet: 'Tối nay họp lúc 20h nha'
+    });
+
+    // Discord: 1 modeMuted channel + 1 active channel
+    document.body.innerHTML = `
+      <li class="containerDefault modeMuted-3a2">
+        <span class="name-3BUD">#random</span>
+        <span class="numberBadge-2s8kKX">9</span>
+      </li>
+      <li class="containerDefault">
+        <span class="name-3BUD">#frontend-review</span>
+        <span data-preview>@phuong PR #42 xanh hết rồi</span>
+        <span class="numberBadge-2s8kKX">3</span>
+      </li>
+    `;
+    expect(extractUnreadFromDom('discord', document)).toBe(3);
+    expect(extractUnreadPreviewFromDom('discord', document)).toEqual({
+      sender: '#frontend-review',
+      snippet: '@phuong PR #42 xanh hết rồi'
+    });
   });
 });

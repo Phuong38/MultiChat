@@ -560,7 +560,7 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       payload: {
         providerId: 'telegram',
         title: 'Telegram',
-        body: 'Ban co 3 tin nhan chua doc',
+        body: 'Bạn có 3 tin nhắn chưa đọc',
         tag: 'fallback-telegram'
       }
     });
@@ -601,6 +601,90 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       type: 'UNREAD_UPDATE',
       providerId: 'telegram',
       count: 5
+    });
+  });
+
+  it('ignores muted Telegram chatlist updates even when document.title increments, and extracts Vietnamese sender + snippet via debounced body observer for unmuted chats', async () => {
+    const sentMessages: RuntimeMessage[] = [];
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'dia-ext-id',
+        sendMessage: vi.fn((msg: RuntimeMessage, cb?: () => void) => {
+          sentMessages.push(msg);
+          cb?.();
+        }),
+        lastError: undefined
+      }
+    });
+
+    const fakeWorkspaceWin = {} as Window;
+    Object.defineProperty(window, 'top', { value: fakeWorkspaceWin, configurable: true });
+    Object.defineProperty(window, 'parent', { value: fakeWorkspaceWin, configurable: true });
+    Object.defineProperty(window.location, 'ancestorOrigins', {
+      value: ['chrome-extension://dia-ext-id'] as unknown as DOMStringList,
+      configurable: true
+    });
+    Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
+
+    document.body.innerHTML = `
+      <ul class="chatlist">
+        <a class="chatlist-chat is-muted" data-peer-id="-999">
+          <span class="peer-title">Nhóm Muted</span>
+          <div class="dialog-subtitle-badge-unread badge-gray is-visible">12</div>
+        </a>
+      </ul>
+    `;
+    document.title = '(12) Telegram';
+
+    await import('../../src/content/frame-agent.isolated');
+
+    // Muted group reports 0 unread and triggers NO fallback notification
+    expect(sentMessages).toContainEqual({
+      type: 'UNREAD_UPDATE',
+      providerId: 'telegram',
+      count: 0
+    });
+    vi.advanceTimersByTime(2000);
+    expect(sentMessages.filter((m) => m.type === 'CHAT_NOTIFY')).toHaveLength(0);
+
+    // Muted group receives another message -> still 0 unread and 0 notifications
+    sentMessages.length = 0;
+    document.querySelector('.badge-gray')!.textContent = '13';
+    document.title = '(13) Telegram';
+    await Promise.resolve();
+    vi.advanceTimersByTime(2000);
+    expect(sentMessages.filter((m) => m.type === 'UNREAD_UPDATE')).toHaveLength(0);
+    expect(sentMessages.filter((m) => m.type === 'CHAT_NOTIFY')).toHaveLength(0);
+
+    // Unmuted chat arrives in DOM -> 200ms debounced body observer catches it + 1500ms fallback sends Vietnamese sender & preview!
+    document.querySelector('.chatlist')!.insertAdjacentHTML(
+      'afterbegin',
+      `
+      <a class="chatlist-chat" data-peer-id="555">
+        <span class="peer-title">Phạm Quốc Bảo</span>
+        <span class="dialog-subtitle-span">Em vừa đẩy bản hotfix lên staging</span>
+        <div class="dialog-subtitle-badge-unread badge-primary is-visible">1</div>
+      </a>
+      `
+    );
+    await Promise.resolve();
+    vi.advanceTimersByTime(220);
+
+    expect(sentMessages).toContainEqual({
+      type: 'UNREAD_UPDATE',
+      providerId: 'telegram',
+      count: 1
+    });
+
+    vi.advanceTimersByTime(1500);
+    expect(sentMessages).toContainEqual({
+      type: 'CHAT_NOTIFY',
+      payload: {
+        providerId: 'telegram',
+        title: 'Phạm Quốc Bảo',
+        body: 'Em vừa đẩy bản hotfix lên staging',
+        tag: 'fallback-telegram-Phạm Quốc Bảo-Em vừa đẩy bản hotfix lê'
+      }
     });
   });
 });
