@@ -49,7 +49,7 @@ body {
 }
 
 #topbar-sensor {
-  height: 5px;
+  height: 2px;
   width: 100%;
   display: flex;
   justify-content: center;
@@ -57,26 +57,18 @@ body {
   pointer-events: auto;
 }
 
-#topbar-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 10px 2px;
-  border-radius: 0 0 9px 9px;
-  background: rgba(19, 24, 36, 0.92);
-  border: 1px solid var(--border);
-  border-top: none;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  opacity: 0.72;
-  transition: opacity 0.14s ease;
+#topbar-handle {
+  width: 36px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: rgba(148, 163, 184, 0.35);
+  pointer-events: none;
+  transition: background-color 0.14s ease, width 0.14s ease;
 }
 
-body.has-unread #topbar-pill {
-  opacity: 1;
-  color: var(--text);
-  border-color: rgba(239, 68, 68, 0.45);
+body.has-unread #topbar-handle {
+  width: 48px;
+  background: rgba(239, 68, 68, 0.85);
 }
 
 #topbar {

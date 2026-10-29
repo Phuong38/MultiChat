@@ -24,7 +24,9 @@ if (isTest) {
 
   const framingPath = resolve(dist, 'rules/framing.json');
   const framing = JSON.parse(readFileSync(framingPath, 'utf8'));
-  framing[0].condition.requestDomains.push('127.0.0.1');
+  for (const rule of framing) {
+    rule.condition.requestDomains.push('127.0.0.1');
+  }
   writeFileSync(framingPath, JSON.stringify(framing, null, 2));
 }
 

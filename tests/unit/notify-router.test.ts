@@ -535,7 +535,7 @@ describe('MV3 background service-worker', () => {
     expect(env.chromeMock.notifications.create).toHaveBeenLastCalledWith(
       testNotif.notifId,
       expect.objectContaining({
-        title: 'Dia MultiChat',
+        title: 'MultiChat Hub',
         message: 'Thông báo native macOS hoạt động tốt!'
       }),
       expect.any(Function)

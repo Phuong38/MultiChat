@@ -616,7 +616,7 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
         {
           type: 'basic',
           iconUrl: getIconUrl(),
-          title: 'Dia MultiChat',
+          title: 'MultiChat Hub',
           message: 'Thông báo native macOS hoạt động tốt!',
           priority: 2
         },

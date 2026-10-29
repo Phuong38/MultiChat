@@ -57,10 +57,10 @@ describe('BentoState pure functions', () => {
   it('formats workspace document title with aggregated unread count', () => {
     expect(
       formatWorkspaceTitle({ zalo: 0, messenger: 0, telegram: 0, discord: 0 })
-    ).toBe('Dia Bento Chat Hub');
+    ).toBe('MultiChat Hub');
     expect(
       formatWorkspaceTitle({ zalo: 2, messenger: 1, telegram: 0, discord: 4 })
-    ).toBe('(7) Dia Bento Chat Hub');
+    ).toBe('(7) MultiChat Hub');
   });
 
   it('resolves production embed URL or validated local E2E testOrigin override', () => {
@@ -753,12 +753,12 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     const totalBadge = document.getElementById('total-unread')!;
     expect(totalBadge.textContent).toBe('5');
     expect(totalBadge.classList.contains('hidden')).toBe(false);
-    expect(document.title).toBe('(5) Dia Bento Chat Hub');
+    expect(document.title).toBe('(5) MultiChat Hub');
 
     // Pausing Telegram resets its unread count to 0 immediately
     tgPauseBtn.click();
     expect(totalBadge.textContent).toBe('2');
-    expect(document.title).toBe('(2) Dia Bento Chat Hub');
+    expect(document.title).toBe('(2) MultiChat Hub');
 
     // Focusing paused Telegram wakes + swaps in a single savePrefs/applyLayout pass and focuses iframe
     sentRuntime.length = 0;
@@ -1048,8 +1048,12 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     await import('../../src/workspace/workspace');
     await flushMicrotasks();
 
-    // 1) Topbar defaults to unpinned auto-hide, clicking #btn-pin-topbar pins, syncs aria-pressed + labels, and persists topbarPinned
+    // 1) Topbar defaults to unpinned auto-hide with zero hanging text pill or "Dia" branding, clicking #btn-pin-topbar pins
     expect(document.body.classList.contains('topbar-pinned')).toBe(false);
+    expect(document.getElementById('topbar-pill')).toBeNull();
+    expect(document.getElementById('topbar-sensor')!.textContent?.trim()).toBe('');
+    expect(document.body.textContent).not.toMatch(/\bdia\b/i);
+    expect(document.querySelector('.brand')!.textContent).toBe('MultiChat Hub');
     const pinBtn = document.getElementById('btn-pin-topbar')!;
     const liteBtn = document.getElementById('btn-lite-media')!;
     const hideBtn = document.getElementById('btn-hide-preview')!;

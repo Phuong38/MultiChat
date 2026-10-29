@@ -22,6 +22,15 @@ test.beforeAll(async () => {
         </html>`);
       return;
     }
+    // Simulate Meta's real server-side Sec-Fetch-Dest: iframe anti-framing rejection on /messenger
+    if (provider === 'messenger' && req.headers['sec-fetch-dest'] === 'iframe') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(
+        '<div class="uiInterstitial"><h2>Không thể xử lý yêu cầu của bạn</h2><a href="/">Trở về trang chủ</a></div>'
+      );
+      return;
+    }
+
     // Deliberately return strict framing blockers to verify DNR framing.json strips them only for extension initiatorDomains!
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
@@ -151,11 +160,17 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
     expect(topbarBox.height).toBe(34);
     expect(topbarBox.y + topbarBox.height).toBeLessThanOrEqual(0);
 
-    const pillBox = (await page.locator('#topbar-pill').boundingBox())!;
-    expect(pillBox.y).toBe(0);
-    expect(pillBox.height).toBeGreaterThanOrEqual(14);
-    expect(pillBox.height).toBeLessThanOrEqual(22);
-    expect(Math.abs(pillBox.x + pillBox.width / 2 - 720)).toBeLessThanOrEqual(2);
+    // Top-edge sensor has zero text and <= 3px height so it never overlaps any .pane-header controls
+    await expect(page.locator('#topbar-pill')).toHaveCount(0);
+    expect((await page.locator('#topbar-sensor').textContent())?.trim()).toBe('');
+    expect(await page.evaluate(() => document.body.innerText)).not.toMatch(/\bdia\b/i);
+    const sensorBox = (await page.locator('#topbar-sensor').boundingBox())!;
+    expect(sensorBox.y).toBe(0);
+    expect(sensorBox.height).toBeLessThanOrEqual(3);
+    const handleBox = (await page.locator('#topbar-handle').boundingBox())!;
+    expect(handleBox.y).toBe(0);
+    expect(handleBox.height).toBeLessThanOrEqual(2);
+    expect(Math.abs(handleBox.x + handleBox.width / 2 - 720)).toBeLessThanOrEqual(2);
 
     const mainBox = (await page.locator('.pane[data-slot="main"]').boundingBox())!;
     const resizerBox = (await page.locator('#grid-resizer').boundingBox())!;
@@ -285,6 +300,19 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
     expect(Math.abs(draggedMainBox.width - 760)).toBeLessThanOrEqual(6);
     await page.mouse.up();
     await expect(page.locator('#resize-indicator')).toBeHidden();
+
+    // At 53% main width (50vw = 720px lands directly over main .pane-controls), verify zero hit-test or visual overlap
+    const mainCtrlBtns = page.locator('.pane[data-slot="main"] .pane-controls button.icon-btn');
+    for (let i = 0; i < 4; i += 1) {
+      const bBox = (await mainCtrlBtns.nth(i).boundingBox())!;
+      expect(bBox.y).toBeGreaterThanOrEqual(sensorBox.y + sensorBox.height);
+      const hitInsideControls = await page.evaluate(
+        ({ cx, cy }) =>
+          Boolean(document.elementFromPoint(cx, cy)?.closest('.pane[data-slot="main"] .pane-controls')),
+        { cx: bBox.x + bBox.width / 2, cy: bBox.y + bBox.height / 2 }
+      );
+      expect(hitInsideControls).toBe(true);
+    }
 
     await page.locator('#grid-resizer').dblclick();
     const resetMainBox = (await page.locator('.pane[data-slot="main"]').boundingBox())!;
@@ -452,8 +480,7 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
       page.locator('section[data-provider="discord"] .pane-title-btn .badge')
     ).toHaveText('4');
     await expect(page.locator('#total-unread')).toHaveText('4');
-    await expect(page.locator('#pill-unread')).toHaveText('4');
-    await expect(page).toHaveTitle('(4) Dia Bento Chat Hub');
+    await expect(page).toHaveTitle('(4) MultiChat Hub');
     await expect(page.locator('link#workspace-favicon')).toHaveAttribute(
       'href',
       /^data:image\/png;base64,/
@@ -550,8 +577,7 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
     ).toHaveText('2');
     await expect(page.locator('#total-unread')).toBeVisible();
     await expect(page.locator('#total-unread')).toHaveText('2');
-    await expect(page.locator('#pill-unread')).toHaveText('2');
-    await expect(page).toHaveTitle('(2) Dia Bento Chat Hub');
+    await expect(page).toHaveTitle('(2) MultiChat Hub');
     await expect
       .poll(async () => sw.evaluate(() => chrome.action.getBadgeText({})))
       .toBe('2');

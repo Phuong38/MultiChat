@@ -86,7 +86,7 @@ export function formatWorkspaceTitle(unreads: Record<ProviderId, number>): strin
       typeof val === 'number' && Number.isFinite(val) && val > 0 ? Math.floor(val) : 0;
     return sum + safe;
   }, 0);
-  return total > 0 ? `(${total}) Dia Bento Chat Hub` : 'Dia Bento Chat Hub';
+  return total > 0 ? `(${total}) MultiChat Hub` : 'MultiChat Hub';
 }
 
 export function resolveEmbedUrl(providerId: ProviderId, testOrigin: string | null): string {

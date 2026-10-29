@@ -30,5 +30,27 @@
       ],
       "resourceTypes": ["sub_frame"]
     }
+  },
+  {
+    "id": 2,
+    "priority": 100,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "sec-fetch-dest", "operation": "set", "value": "document" }
+      ]
+    },
+    "condition": {
+      "initiatorDomains": [
+        "ndcplbpbnmkeikikgmpgkaaiefmecmjh",
+        "messenger.com",
+        "facebook.com"
+      ],
+      "requestDomains": [
+        "messenger.com",
+        "facebook.com"
+      ],
+      "resourceTypes": ["sub_frame"]
+    }
   }
 ]

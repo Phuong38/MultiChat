@@ -196,12 +196,10 @@ function updateUnreadUi(): void {
     pane.unreadBadge.textContent = String(count);
     pane.unreadBadge.classList.toggle('hidden', count <= 0);
   }
-  for (const badgeId of ['total-unread', 'pill-unread']) {
-    const el = document.getElementById(badgeId);
-    if (el) {
-      el.textContent = String(total);
-      el.classList.toggle('hidden', total <= 0);
-    }
+  const totalBadge = document.getElementById('total-unread');
+  if (totalBadge) {
+    totalBadge.textContent = String(total);
+    totalBadge.classList.toggle('hidden', total <= 0);
   }
   document.body.classList.toggle('has-unread', total > 0);
   document.title = formatWorkspaceTitle(unreads);

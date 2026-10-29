@@ -24,6 +24,8 @@ describe('Manifest V3 & DNR Rulesets', () => {
   it('configures required MV3 permissions, deterministic manifest key, rule_resources, and dual-world sub_frame scripts', () => {
     const manifest = readJson('public/manifest.json');
     expect(manifest.manifest_version).toBe(3);
+    expect(manifest.name).toBe('MultiChat Hub');
+    expect(manifest.description).not.toMatch(/\bdia\b/i);
     expect(typeof manifest.key).toBe('string');
     const derivedExtId = deriveExtensionIdFromManifestKey(manifest.key);
     expect(derivedExtId).toMatch(/^[a-p]{32}$/);
@@ -34,7 +36,7 @@ describe('Manifest V3 & DNR Rulesets', () => {
       '48': 'icons/icon-48.png',
       '128': 'icons/icon-128.png'
     });
-    expect(manifest.action?.default_title).toBe('Mở Dia MultiChat Hub');
+    expect(manifest.action?.default_title).toBe('Mở MultiChat Hub');
     expect(manifest.action?.default_icon).toEqual({
       '16': 'icons/icon-16.png',
       '32': 'icons/icon-32.png',
@@ -110,6 +112,20 @@ describe('Manifest V3 & DNR Rulesets', () => {
     expect(removed).toEqual(
       expect.arrayContaining(['x-frame-options', 'content-security-policy'])
     );
+
+    const msgrRule = framing.find((r: { id: number }) => r.id === 2);
+    expect(msgrRule).toBeDefined();
+    expect(msgrRule.action.type).toBe('modifyHeaders');
+    expect(msgrRule.action.requestHeaders).toEqual([
+      { header: 'sec-fetch-dest', operation: 'set', value: 'document' }
+    ]);
+    expect(msgrRule.condition.resourceTypes).toEqual(['sub_frame']);
+    expect(msgrRule.condition.initiatorDomains).toEqual([
+      derivedExtId,
+      'messenger.com',
+      'facebook.com'
+    ]);
+    expect(msgrRule.condition.requestDomains).toEqual(['messenger.com', 'facebook.com']);
   });
 
   it('defines valid block rules in diet.json and lite-media.json with unique IDs', () => {
