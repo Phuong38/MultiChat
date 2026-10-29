@@ -1,5 +1,5 @@
 import type { PendingClickTarget, ProviderId, RuntimeMessage } from '../shared/types';
-import { PROVIDERS } from '../providers/registry';
+import { PROVIDER_ORDER, PROVIDERS } from '../providers/registry';
 import {
   shouldUpgradeCookie,
   syncProviderCookies,
@@ -12,9 +12,12 @@ const SW_PREFS_KEY = '__dia_sw_prefs';
 const SW_FOCUS_KEY = '__dia_sw_focus';
 const SW_REAUTH_KEY = '__dia_sw_reauth';
 const SW_PENDING_CLICK_KEY = '__dia_sw_pending_click';
+const SW_UNREADS_KEY = '__dia_sw_unreads';
 
 const getWorkspaceUrl = () => chrome.runtime.getURL('workspace.html');
 const getIconUrl = () => chrome.runtime.getURL('icons/icon-128.png');
+const getProviderIconUrl = (providerId: ProviderId) =>
+  chrome.runtime.getURL(`icons/provider-${providerId}-128.png`);
 
 const router = new NotifyRouter(
   (id, opts) =>
@@ -28,10 +31,22 @@ const router = new NotifyRouter(
         resolve();
       });
     }),
-  getIconUrl()
+  getProviderIconUrl
 );
 
 const reauthWindows = new Map<number, ProviderId>();
+const unreadsByProvider: Record<ProviderId, number> = {
+  zalo: 0,
+  messenger: 0,
+  telegram: 0,
+  discord: 0
+};
+const pausedByProvider: Record<ProviderId, boolean> = {
+  zalo: false,
+  messenger: false,
+  telegram: false,
+  discord: false
+};
 let workspaceTabId: number | null = null;
 let currentWindowFocused = false;
 let currentFocusedProvider: ProviderId | null = null;
@@ -39,7 +54,27 @@ let pendingClickTarget: PendingClickTarget | null = null;
 let pendingClickUpdatedInMemory = false;
 let prefsUpdatedInMemory = false;
 let focusUpdatedInMemory = false;
+let unreadsUpdatedInMemory = false;
 let hydrationPromise: Promise<void> | null = null;
+
+function syncActionBadge(): void {
+  let total = 0;
+  for (const id of PROVIDER_ORDER) {
+    if (!pausedByProvider[id]) {
+      total += unreadsByProvider[id] || 0;
+    }
+  }
+  const text = total <= 0 ? '' : total > 99 ? '99+' : String(total);
+  try {
+    if (total > 0) {
+      void chrome.action?.setBadgeBackgroundColor?.({ color: '#EF4444' });
+      void chrome.action?.setBadgeTextColor?.({ color: '#FFFFFF' });
+    }
+    void chrome.action?.setBadgeText?.({ text });
+  } catch {
+    // Ignore when action badge API is unavailable
+  }
+}
 
 function getSessionStorage(): Pick<chrome.storage.StorageArea, 'get' | 'set'> | null {
   return chrome.storage?.session ?? null;
@@ -55,7 +90,8 @@ function ensureHydrated(): Promise<void> {
           SW_PREFS_KEY,
           SW_FOCUS_KEY,
           SW_REAUTH_KEY,
-          SW_PENDING_CLICK_KEY
+          SW_PENDING_CLICK_KEY,
+          SW_UNREADS_KEY
         ]);
         if (!prefsUpdatedInMemory && data[SW_PREFS_KEY]) {
           const p = data[SW_PREFS_KEY] as { dnd?: unknown; hidePreview?: unknown };
@@ -115,6 +151,31 @@ function ensureHydrated(): Promise<void> {
                   }
                 : { providerId: rawClick.providerId as ProviderId };
           }
+        }
+        if (
+          !unreadsUpdatedInMemory &&
+          data[SW_UNREADS_KEY] &&
+          typeof data[SW_UNREADS_KEY] === 'object'
+        ) {
+          const rawState = data[SW_UNREADS_KEY] as {
+            unreads?: Record<string, unknown>;
+            paused?: Record<string, unknown>;
+          };
+          const rawPaused =
+            rawState.paused && typeof rawState.paused === 'object' ? rawState.paused : null;
+          const rawUnreads =
+            rawState.unreads && typeof rawState.unreads === 'object' ? rawState.unreads : null;
+          for (const id of PROVIDER_ORDER) {
+            const isPaused = rawPaused ? Boolean(rawPaused[id]) : false;
+            pausedByProvider[id] = isPaused;
+            const rawCount = rawUnreads ? rawUnreads[id] : 0;
+            const sanitizedCount =
+              typeof rawCount === 'number' && Number.isFinite(rawCount) && rawCount > 0
+                ? Math.floor(rawCount)
+                : 0;
+            unreadsByProvider[id] = isPaused ? 0 : sanitizedCount;
+          }
+          syncActionBadge();
         }
       } catch {
         // Ignore transient session storage errors
@@ -362,8 +423,33 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
     }
     case 'UNREAD_UPDATE': {
       void broadcastToWorkspace(rawMsg);
-      sendResponse({ ok: true });
-      return false;
+      void (async () => {
+        try {
+          await ensureHydrated();
+          if (Object.hasOwn(PROVIDERS, rawMsg.providerId)) {
+            const nextCount =
+              typeof rawMsg.count === 'number' &&
+              Number.isFinite(rawMsg.count) &&
+              rawMsg.count > 0
+                ? Math.floor(rawMsg.count)
+                : 0;
+            unreadsUpdatedInMemory = true;
+            unreadsByProvider[rawMsg.providerId] = pausedByProvider[rawMsg.providerId]
+              ? 0
+              : nextCount;
+            syncActionBadge();
+            await persistSession({
+              [SW_UNREADS_KEY]: {
+                unreads: { ...unreadsByProvider },
+                paused: { ...pausedByProvider }
+              }
+            });
+          }
+        } finally {
+          sendResponse({ ok: true });
+        }
+      })();
+      return true;
     }
     case 'FOCUS_PROVIDER': {
       if (!Object.hasOwn(PROVIDERS, rawMsg.providerId)) {
@@ -409,10 +495,61 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
       prefsUpdatedInMemory = true;
       const nextPrefs = { dnd: rawMsg.prefs.dnd, hidePreview: rawMsg.prefs.hidePreview };
       router.setPrefs(nextPrefs);
-      void persistSession({ [SW_PREFS_KEY]: nextPrefs });
       void applyLiteMediaRuleset(rawMsg.prefs.liteMedia);
-      sendResponse({ ok: true });
-      return false;
+      void (async () => {
+        try {
+          await ensureHydrated();
+          await persistSession({ [SW_PREFS_KEY]: nextPrefs });
+          if (rawMsg.prefs.paused && typeof rawMsg.prefs.paused === 'object') {
+            unreadsUpdatedInMemory = true;
+            for (const id of PROVIDER_ORDER) {
+              pausedByProvider[id] = Boolean(rawMsg.prefs.paused[id]);
+              if (pausedByProvider[id]) {
+                unreadsByProvider[id] = 0;
+              }
+            }
+            syncActionBadge();
+            await persistSession({
+              [SW_UNREADS_KEY]: {
+                unreads: { ...unreadsByProvider },
+                paused: { ...pausedByProvider }
+              }
+            });
+          }
+        } finally {
+          sendResponse({ ok: true });
+        }
+      })();
+      return true;
+    }
+    case 'FRAME_FOCUSED': {
+      if (!Object.hasOwn(PROVIDERS, rawMsg.providerId)) {
+        sendResponse({ ok: false });
+        return false;
+      }
+      void (async () => {
+        try {
+          await ensureHydrated();
+          focusUpdatedInMemory = true;
+          if (typeof sender.tab?.id === 'number') {
+            workspaceTabId = sender.tab.id;
+          }
+          currentFocusedProvider = rawMsg.providerId;
+          const nextFocus = {
+            windowFocused: currentWindowFocused,
+            focusedProvider: currentFocusedProvider
+          };
+          router.setFocusState(nextFocus);
+          await persistSession({ [SW_FOCUS_KEY]: { ...nextFocus, tabId: workspaceTabId } });
+          await broadcastToWorkspace({
+            type: 'ACTIVE_PROVIDER_CHANGED',
+            providerId: rawMsg.providerId
+          });
+        } finally {
+          sendResponse({ ok: true });
+        }
+      })();
+      return true;
     }
     case 'OPEN_REAUTH': {
       if (!Object.hasOwn(PROVIDERS, rawMsg.providerId)) {
@@ -447,8 +584,8 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
         {
           type: 'basic',
           iconUrl: getIconUrl(),
-          title: 'Dia Bento Chat Hub',
-          message: 'Thong bao native macOS hoat dong tot!',
+          title: 'Dia MultiChat',
+          message: 'Thông báo native macOS hoạt động tốt!',
           priority: 2
         },
         (id) => {

@@ -41,6 +41,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   let isMainSlot = providerId === 'zalo';
   let isHovered = false;
   let lastReportedUnread = -1;
+  let lastFocusSentAt = -Infinity;
   let domBooted = false;
   let observer: MutationObserver | null = null;
   let bodyObserver: MutationObserver | null = null;
@@ -176,6 +177,13 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     }
   };
 
+  const onFrameInteraction = (): void => {
+    const now = Date.now();
+    if (now - lastFocusSentAt < 800) return;
+    lastFocusSentAt = now;
+    sendToBackground({ type: 'FRAME_FOCUSED', providerId });
+  };
+
   const onMouseEnter = (): void => {
     isHovered = true;
     applySlotPolicy();
@@ -224,6 +232,8 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   window.addEventListener(MAIN_TO_ISO, onMainToIso);
   window.addEventListener('message', onWindowMessage);
   window.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('pointerdown', onFrameInteraction, true);
+  window.addEventListener('focusin', onFrameInteraction, true);
 
   if (document.readyState === 'loading') {
     window.addEventListener('DOMContentLoaded', bootDomObservers, { once: true });
@@ -236,6 +246,8 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
       window.removeEventListener(MAIN_TO_ISO, onMainToIso);
       window.removeEventListener('message', onWindowMessage);
       window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('pointerdown', onFrameInteraction, true);
+      window.removeEventListener('focusin', onFrameInteraction, true);
       window.removeEventListener('DOMContentLoaded', bootDomObservers);
       document.documentElement?.removeEventListener('mouseenter', onMouseEnter);
       document.documentElement?.removeEventListener('mouseleave', onMouseLeave);

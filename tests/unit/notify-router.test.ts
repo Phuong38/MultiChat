@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NotifyRouter } from '../../src/background/notify-router';
+import { NotifyRouter, formatNotificationContent } from '../../src/background/notify-router';
 import type { RuntimeMessage } from '../../src/shared/types';
 
 describe('NotifyRouter', () => {
@@ -69,7 +69,7 @@ describe('NotifyRouter', () => {
       expect.any(String),
       expect.objectContaining({
         title: 'Messenger',
-        message: 'Co tin nhan moi'
+        message: 'Bạn có tin nhắn mới'
       })
     );
   });
@@ -87,8 +87,8 @@ describe('NotifyRouter', () => {
     expect(create).toHaveBeenLastCalledWith(
       unfocusedId,
       expect.objectContaining({
-        title: 'Discord - #ops',
-        message: 'Tin nhan moi',
+        title: 'Discord • #ops',
+        message: 'Tin nhắn mới',
         priority: 2
       })
     );
@@ -151,6 +151,62 @@ describe('NotifyRouter', () => {
     );
     expect(retryId).toBeTruthy();
     expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves per-provider 128px brand iconUrl and formats UTF-8 Vietnamese "{Provider} • {Sender}" titles cleanly', async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    const router = new NotifyRouter(
+      create,
+      (id) => `chrome-extension://ext-id/icons/provider-${id}-128.png`
+    );
+
+    await router.handleIncoming(
+      {
+        providerId: 'zalo',
+        title: '(2) Nguyễn Minh Tuấn',
+        body: 'Anh ơi gửi giúp em bản thiết kế nhé!'
+      },
+      1000
+    );
+    expect(create).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        iconUrl: 'chrome-extension://ext-id/icons/provider-zalo-128.png',
+        title: 'Zalo • Nguyễn Minh Tuấn',
+        message: 'Anh ơi gửi giúp em bản thiết kế nhé!'
+      })
+    );
+
+    // Avoid duplicating provider name when raw title equals provider name ("Telegram" / "Telegram Web")
+    await router.handleIncoming(
+      {
+        providerId: 'telegram',
+        title: 'Telegram Web',
+        body: 'Bạn có 1 tin nhắn chưa đọc'
+      },
+      2000
+    );
+    expect(create).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        iconUrl: 'chrome-extension://ext-id/icons/provider-telegram-128.png',
+        title: 'Telegram',
+        message: 'Bạn có 1 tin nhắn chưa đọc'
+      })
+    );
+
+    expect(
+      formatNotificationContent('Zalo', 'ZaloPay', 'Thanh toán thành công', false)
+    ).toEqual({
+      title: 'Zalo • ZaloPay',
+      message: 'Thanh toán thành công'
+    });
+    expect(
+      formatNotificationContent('Messenger', '• (9+) Messenger | Nhóm Thiết Kế', '   ', false)
+    ).toEqual({
+      title: 'Messenger • Nhóm Thiết Kế',
+      message: 'Tin nhắn mới'
+    });
   });
 });
 
@@ -239,7 +295,10 @@ function createChromeMock(sharedSessionStore: Record<string, unknown> = {}) {
       lastError: undefined
     },
     action: {
-      onClicked: onActionClicked
+      onClicked: onActionClicked,
+      setBadgeText: vi.fn().mockResolvedValue(undefined),
+      setBadgeBackgroundColor: vi.fn().mockResolvedValue(undefined),
+      setBadgeTextColor: vi.fn().mockResolvedValue(undefined)
     },
     cookies: {
       getAll: cookiesGetAll,
@@ -380,7 +439,7 @@ describe('MV3 background service-worker', () => {
       chatRes2.notifId,
       expect.objectContaining({
         title: 'Telegram',
-        message: 'Co tin nhan moi'
+        message: 'Bạn có tin nhắn mới'
       }),
       expect.any(Function)
     );
@@ -473,6 +532,14 @@ describe('MV3 background service-worker', () => {
 
     const testNotif = (await env.dispatchMessage({ type: 'TEST_NOTIFY' })) as { notifId: string };
     expect(testNotif.notifId).toMatch(/^dia-test:/);
+    expect(env.chromeMock.notifications.create).toHaveBeenLastCalledWith(
+      testNotif.notifId,
+      expect.objectContaining({
+        title: 'Dia MultiChat',
+        message: 'Thông báo native macOS hoạt động tốt!'
+      }),
+      expect.any(Function)
+    );
 
     // Workspace tab 77 reports active focus on discord
     env.chromeMock.tabs.query.mockResolvedValue([
@@ -636,5 +703,118 @@ describe('MV3 background service-worker', () => {
     });
     const consumed2 = await envCold.dispatchMessage({ type: 'CONSUME_PENDING_CLICK' });
     expect(consumed2).toEqual({ target: null });
+  });
+
+  it('syncs chrome.action unread badge across providers/pause/SW-restart and updates active focused pane via FRAME_FOCUSED', async () => {
+    const sharedSession: Record<string, unknown> = {};
+    const env = createChromeMock(sharedSession);
+    env.chromeMock.tabs.query.mockResolvedValue([
+      { id: 10, windowId: 1, active: true, url: 'chrome-extension://ext-id/workspace.html' }
+    ]);
+    env.chromeMock.windows.get.mockResolvedValue({ id: 1, focused: true });
+
+    vi.stubGlobal('chrome', env.chromeMock);
+    await import('../../src/background/service-worker');
+
+    // Unread updates aggregate onto Dia toolbar action badge
+    await env.dispatchMessage({ type: 'UNREAD_UPDATE', providerId: 'zalo', count: 3 });
+    await env.dispatchMessage({ type: 'UNREAD_UPDATE', providerId: 'messenger', count: 98 });
+    await vi.waitFor(() => {
+      expect(env.chromeMock.action.setBadgeBackgroundColor).toHaveBeenCalledWith({
+        color: '#EF4444'
+      });
+      expect(env.chromeMock.action.setBadgeText).toHaveBeenLastCalledWith({ text: '99+' });
+    });
+
+    // Pausing messenger via SYNC_PREFS zeroes messenger's contribution -> badge drops to '3'
+    await env.dispatchMessage({
+      type: 'SYNC_PREFS',
+      prefs: {
+        dnd: false,
+        hidePreview: false,
+        liteMedia: false,
+        paused: { zalo: false, messenger: true, telegram: false, discord: false }
+      }
+    });
+    await vi.waitFor(() => {
+      expect(env.chromeMock.action.setBadgeText).toHaveBeenLastCalledWith({ text: '3' });
+    });
+
+    // Zalo starts as focusedProvider ('main'), then user clicks inside sub-pane Telegram (FRAME_FOCUSED)
+    await env.dispatchMessage(
+      { type: 'WORKSPACE_FOCUS_STATE', windowFocused: true, focusedProvider: 'zalo' },
+      { tab: { id: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender
+    );
+    await env.dispatchMessage({ type: 'FRAME_FOCUSED', providerId: 'telegram' });
+    await vi.waitFor(() => {
+      expect(env.chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+        type: 'ACTIVE_PROVIDER_CHANGED',
+        providerId: 'telegram'
+      });
+    });
+
+    // Now incoming Zalo notification MUST NOT be suppressed because user is actually typing in Telegram!
+    const zaloNotif = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'zalo', title: 'Tuấn', body: 'Tin mới bên Zalo' }
+    })) as { notifId: string | null };
+    expect(zaloNotif.notifId).toBeTruthy();
+    expect(env.chromeMock.notifications.create).toHaveBeenLastCalledWith(
+      zaloNotif.notifId,
+      expect.objectContaining({
+        iconUrl: 'chrome-extension://ext-id/icons/provider-zalo-128.png',
+        title: 'Zalo • Tuấn',
+        message: 'Tin mới bên Zalo'
+      }),
+      expect.any(Function)
+    );
+
+    // Meanwhile incoming Telegram notification IS suppressed because user is focused in Telegram
+    const tgSuppressed = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'telegram', title: 'Bot', body: 'Đang mở khung này' }
+    })) as { notifId: string | null };
+    expect(tgSuppressed.notifId).toBeNull();
+
+    // Simulate MV3 service worker cold wake-up where UNREAD_UPDATE arrives BEFORE session.get finishes
+    vi.resetModules();
+    const envRestart = createChromeMock(sharedSession);
+    const rawSessionGet = envRestart.chromeMock.storage.session.get;
+    envRestart.chromeMock.storage.session.get = vi.fn(async (keys: string[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return rawSessionGet(keys);
+    });
+    vi.stubGlobal('chrome', envRestart.chromeMock);
+    await import('../../src/background/service-worker');
+
+    // Discord reports 4 unreads immediately on cold wake-up; Zalo's 3 unreads and Messenger's paused state must survive!
+    await envRestart.dispatchMessage({ type: 'UNREAD_UPDATE', providerId: 'discord', count: 4 });
+    expect(envRestart.chromeMock.action.setBadgeText).toHaveBeenLastCalledWith({ text: '7' });
+
+    // Simulate a second cold wake-up where SYNC_PREFS arrives BEFORE session.get finishes
+    vi.resetModules();
+    const envRestart2 = createChromeMock(sharedSession);
+    const rawSessionGet2 = envRestart2.chromeMock.storage.session.get;
+    envRestart2.chromeMock.storage.session.get = vi.fn(async (keys: string[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return rawSessionGet2(keys);
+    });
+    vi.stubGlobal('chrome', envRestart2.chromeMock);
+    await import('../../src/background/service-worker');
+
+    await envRestart2.dispatchMessage({
+      type: 'SYNC_PREFS',
+      prefs: {
+        dnd: false,
+        hidePreview: false,
+        liteMedia: false,
+        paused: { zalo: false, messenger: true, telegram: false, discord: true }
+      }
+    });
+    expect(envRestart2.chromeMock.action.setBadgeText).toHaveBeenLastCalledWith({ text: '3' });
+
+    // Clearing Zalo unreads drops toolbar badge to empty string
+    await envRestart2.dispatchMessage({ type: 'UNREAD_UPDATE', providerId: 'zalo', count: 0 });
+    expect(envRestart2.chromeMock.action.setBadgeText).toHaveBeenLastCalledWith({ text: '' });
   });
 });

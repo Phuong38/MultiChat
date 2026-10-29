@@ -51,7 +51,14 @@ export type RuntimeMessage =
       windowFocused: boolean;
       focusedProvider: ProviderId | null;
     }
-  | { type: 'SYNC_PREFS'; prefs: Pick<WorkspacePrefs, 'dnd' | 'hidePreview' | 'liteMedia'> }
+  | {
+      type: 'SYNC_PREFS';
+      prefs: Pick<WorkspacePrefs, 'dnd' | 'hidePreview' | 'liteMedia'> & {
+        paused?: Record<ProviderId, boolean>;
+      };
+    }
+  | { type: 'FRAME_FOCUSED'; providerId: ProviderId }
+  | { type: 'ACTIVE_PROVIDER_CHANGED'; providerId: ProviderId }
   | { type: 'OPEN_REAUTH'; providerId: ProviderId }
   | { type: 'TEST_NOTIFY' }
   | { type: 'GET_DUP_TABS' }

@@ -6,9 +6,36 @@ export type CreateNotificationFn = (
   options: chrome.notifications.NotificationOptions<true>
 ) => Promise<void>;
 
+export type IconSource = string | ((providerId: ProviderId) => string);
+
 const DEDUP_WINDOW_MS = 3000;
 const MAX_STORED_TOKENS = 100;
 const MAX_ENCODED_TOKEN_LEN = 256;
+const LEADING_UNREAD_PREFIX_RE = /^\s*[•*]?\s*\(\d+\+?\)\s*/;
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function formatNotificationContent(
+  providerName: string,
+  rawTitle: string,
+  rawBody: string,
+  hidePreview: boolean
+): { title: string; message: string } {
+  if (hidePreview) {
+    return { title: providerName, message: 'Bạn có tin nhắn mới' };
+  }
+  const withoutCount = rawTitle.trim().replace(LEADING_UNREAD_PREFIX_RE, '').trim();
+  const providerPrefixRe = new RegExp(
+    `^${escapeRegExp(providerName)}(?:\\s+Web)?(?:\\s*[-•:|]\\s*|\\s*$)`,
+    'i'
+  );
+  const senderRest = withoutCount.replace(providerPrefixRe, '').trim();
+  const title = senderRest ? `${providerName} • ${senderRest}` : providerName;
+  const message = rawBody.trim() || 'Tin nhắn mới';
+  return { title, message };
+}
 
 export class NotifyRouter {
   private dnd = false;
@@ -21,7 +48,7 @@ export class NotifyRouter {
 
   constructor(
     private readonly createNotification: CreateNotificationFn,
-    private readonly iconUrl: string
+    private readonly iconSource: IconSource
   ) {}
 
   setPrefs(prefs: { dnd: boolean; hidePreview: boolean }): void {
@@ -32,6 +59,10 @@ export class NotifyRouter {
   setFocusState(state: { windowFocused: boolean; focusedProvider: ProviderId | null }): void {
     this.windowFocused = state.windowFocused;
     this.focusedProvider = state.focusedProvider;
+  }
+
+  private resolveIconUrl(providerId: ProviderId): string {
+    return typeof this.iconSource === 'function' ? this.iconSource(providerId) : this.iconSource;
   }
 
   async handleIncoming(payload: NotifyPayload, nowMs = Date.now()): Promise<string | null> {
@@ -50,14 +81,12 @@ export class NotifyRouter {
     this.recentFingerprints.set(dedupKey, nowMs);
 
     const providerName = PROVIDERS[payload.providerId].name;
-    const trimmedTitle = payload.title.trim();
-    const title =
-      this.hidePreview || !trimmedTitle
-        ? providerName
-        : trimmedTitle.startsWith(providerName)
-          ? trimmedTitle
-          : `${providerName} - ${trimmedTitle}`;
-    const message = this.hidePreview ? 'Co tin nhan moi' : payload.body || 'Tin nhan moi';
+    const { title, message } = formatNotificationContent(
+      providerName,
+      payload.title,
+      payload.body,
+      this.hidePreview
+    );
 
     this.seq += 1;
     const rawEncoded = payload.notifToken ? encodeURIComponent(payload.notifToken) : '';
@@ -77,7 +106,7 @@ export class NotifyRouter {
     try {
       await this.createNotification(notifId, {
         type: 'basic',
-        iconUrl: this.iconUrl,
+        iconUrl: this.resolveIconUrl(payload.providerId),
         title,
         message,
         priority: 2

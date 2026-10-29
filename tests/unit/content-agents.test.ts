@@ -530,6 +530,17 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       providerId: 'telegram'
     });
 
+    // Pointer/focus interaction inside iframe reports FRAME_FOCUSED with 800ms cooldown
+    sentMessages.length = 0;
+    window.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    window.dispatchEvent(new Event('focusin', { bubbles: true }));
+    expect(sentMessages.filter((m) => m.type === 'FRAME_FOCUSED')).toEqual([
+      { type: 'FRAME_FOCUSED', providerId: 'telegram' }
+    ]);
+    vi.advanceTimersByTime(800);
+    window.dispatchEvent(new Event('focusin', { bubbles: true }));
+    expect(sentMessages.filter((m) => m.type === 'FRAME_FOCUSED')).toHaveLength(2);
+
     // Title mutation fires MutationObserver immediately without waiting for 3000ms poll
     sentMessages.length = 0;
     document.title = '(7) Telegram';
