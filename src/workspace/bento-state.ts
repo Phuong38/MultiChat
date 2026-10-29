@@ -11,6 +11,7 @@ export const SLOT_IDS: readonly [SlotId, SlotId, SlotId, SlotId] = [
 export const DEFAULT_PREFS: WorkspacePrefs = {
   slotOrder: ['zalo', 'messenger', 'telegram', 'discord'],
   mainWidthPct: 66,
+  topbarPinned: false,
   dnd: false,
   hidePreview: false,
   liteMedia: false,
@@ -73,6 +74,25 @@ export function clampMainWidth(pct: number): number {
   return Math.min(80, Math.max(45, Math.round(pct)));
 }
 
+export function formatSplitRatio(mainWidthPct: number): string {
+  const main = clampMainWidth(mainWidthPct);
+  return `Chính ${main}% • Phụ ${100 - main}%`;
+}
+
+export interface ShortcutKeyInput {
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  code: string;
+  key: string;
+}
+
+export function isAltMaximizeShortcut(ev: ShortcutKeyInput): boolean {
+  if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return false;
+  return ev.code === 'KeyM' || (!ev.code && (ev.key === 'm' || ev.key === 'M'));
+}
+
 export function formatWorkspaceTitle(unreads: Record<ProviderId, number>): string {
   const total = PROVIDER_ORDER.reduce((sum, id) => {
     const val = unreads[id];
@@ -96,6 +116,7 @@ export function sanitizeWorkspacePrefs(raw: unknown): WorkspacePrefs {
     return {
       slotOrder: [...DEFAULT_PREFS.slotOrder],
       mainWidthPct: DEFAULT_PREFS.mainWidthPct,
+      topbarPinned: DEFAULT_PREFS.topbarPinned,
       dnd: DEFAULT_PREFS.dnd,
       hidePreview: DEFAULT_PREFS.hidePreview,
       liteMedia: DEFAULT_PREFS.liteMedia,
@@ -115,6 +136,8 @@ export function sanitizeWorkspacePrefs(raw: unknown): WorkspacePrefs {
       ? clampMainWidth(obj.mainWidthPct)
       : DEFAULT_PREFS.mainWidthPct;
 
+  const topbarPinned =
+    typeof obj.topbarPinned === 'boolean' ? obj.topbarPinned : DEFAULT_PREFS.topbarPinned;
   const dnd = typeof obj.dnd === 'boolean' ? obj.dnd : DEFAULT_PREFS.dnd;
   const hidePreview =
     typeof obj.hidePreview === 'boolean' ? obj.hidePreview : DEFAULT_PREFS.hidePreview;
@@ -143,6 +166,7 @@ export function sanitizeWorkspacePrefs(raw: unknown): WorkspacePrefs {
   return {
     slotOrder,
     mainWidthPct,
+    topbarPinned,
     dnd,
     hidePreview,
     liteMedia,

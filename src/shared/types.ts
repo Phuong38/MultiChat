@@ -18,6 +18,7 @@ export interface ProviderConfig {
 export interface WorkspacePrefs {
   slotOrder: [ProviderId, ProviderId, ProviderId, ProviderId];
   mainWidthPct: number;
+  topbarPinned: boolean;
   dnd: boolean;
   hidePreview: boolean;
   liteMedia: boolean;

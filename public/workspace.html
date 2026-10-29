@@ -4,32 +4,72 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Dia Bento Chat Hub</title>
+    <link id="workspace-favicon" rel="icon" type="image/png" href="icons/icon-32.png" />
     <link rel="stylesheet" href="workspace.css" />
   </head>
   <body>
-    <header id="topbar">
-      <div class="topbar-left">
-        <span class="brand">Dia Bento Chat</span>
-        <span id="total-unread" class="badge hidden">0</span>
-        <button id="dup-tabs-btn" class="warn-btn hidden" type="button"></button>
+    <div id="topbar-shell">
+      <div id="topbar-sensor" aria-hidden="true">
+        <div id="topbar-pill">
+          <span class="pill-title">Dia MultiChat</span>
+          <span id="pill-unread" class="badge hidden">0</span>
+        </div>
       </div>
-      <div class="topbar-right">
-        <span class="hint">Alt+1..4 doi khung chinh</span>
-        <button id="btn-lite-media" class="toggle-btn" type="button" title="Chan autoplay GIF nang">
-          Lite Media
-        </button>
-        <button id="btn-hide-preview" class="toggle-btn" type="button" title="An noi dung thong bao">
-          An Noi Dung
-        </button>
-        <button id="btn-dnd" class="toggle-btn" type="button" title="Tat thong bao macOS">
-          DND
-        </button>
-        <button id="btn-test-notify" class="action-btn" type="button">Test Notify</button>
-      </div>
-    </header>
+
+      <header id="topbar">
+        <div class="topbar-left">
+          <span class="brand">Dia MultiChat</span>
+          <span id="total-unread" class="badge hidden">0</span>
+          <button id="dup-tabs-btn" class="warn-btn hidden" type="button"></button>
+        </div>
+        <div class="topbar-right">
+          <span class="hint">⌥1..4 đổi khung • ⌥M phóng to</span>
+          <button
+            id="btn-lite-media"
+            class="toggle-btn"
+            type="button"
+            title="Chặn tự phát GIF nặng để giảm RAM"
+          >
+            Tiết kiệm Media
+          </button>
+          <button
+            id="btn-hide-preview"
+            class="toggle-btn"
+            type="button"
+            title="Ẩn tên người gửi và nội dung trên banner thông báo"
+          >
+            Ẩn nội dung
+          </button>
+          <button
+            id="btn-dnd"
+            class="toggle-btn"
+            type="button"
+            title="Tắt toàn bộ thông báo macOS"
+          >
+            Không làm phiền
+          </button>
+          <button id="btn-test-notify" class="action-btn" type="button">
+            Thử thông báo
+          </button>
+          <button
+            id="btn-pin-topbar"
+            class="toggle-btn icon-only-btn"
+            type="button"
+            title="Ghim cố định thanh công cụ"
+            aria-label="Ghim cố định thanh công cụ"
+          ></button>
+        </div>
+      </header>
+    </div>
 
     <main id="bento-grid">
-      <div id="grid-resizer" title="Keo de chinh do rong khung chinh"></div>
+      <div
+        id="grid-resizer"
+        title="Kéo để chỉnh độ rộng khung Chính / Phụ (Nháy đúp để khôi phục 66%)"
+      >
+        <span class="resizer-grip"></span>
+      </div>
+      <div id="resize-indicator" class="hidden" aria-live="polite"></div>
     </main>
 
     <script src="workspace.js"></script>

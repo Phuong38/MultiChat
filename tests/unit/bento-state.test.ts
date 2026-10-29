@@ -2,18 +2,31 @@
 // @vitest-environment-options { "url": "http://localhost/workspace.html" }
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderId, RuntimeMessage, WorkspacePrefs } from '../../src/shared/types';
 import {
   DEFAULT_PREFS,
   SLOT_IDS,
   clampMainWidth,
   extractAltShortcutDigit,
+  formatSplitRatio,
   formatWorkspaceTitle,
+  isAltMaximizeShortcut,
   resolveEmbedUrl,
   sanitizeWorkspacePrefs,
   swapProviderToMain
 } from '../../src/workspace/bento-state';
+import { updateWorkspaceFavicon } from '../../src/workspace/favicon';
+import { createActionIconSvg, createBrandIconSvg } from '../../src/workspace/icons';
+
+beforeEach(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+});
+
+afterEach(() => {
+  document.head.innerHTML = '';
+  vi.restoreAllMocks();
+});
 
 describe('BentoState pure functions', () => {
   it('swaps selected sub-pane with current main pane while keeping other sub-panes stable', () => {
@@ -85,6 +98,7 @@ describe('BentoState pure functions', () => {
     const dupOrder = sanitizeWorkspacePrefs({
       slotOrder: ['zalo', 'zalo', 'telegram', 'discord'],
       mainWidthPct: 99,
+      topbarPinned: 'yes',
       dnd: true,
       hidePreview: 'yes',
       liteMedia: 1,
@@ -93,6 +107,7 @@ describe('BentoState pure functions', () => {
     expect(dupOrder).toEqual({
       slotOrder: ['zalo', 'messenger', 'telegram', 'discord'],
       mainWidthPct: 80,
+      topbarPinned: false,
       dnd: true,
       hidePreview: false,
       liteMedia: false,
@@ -114,15 +129,121 @@ describe('BentoState pure functions', () => {
     });
     expect(unknownOrder.slotOrder).toEqual(['zalo', 'messenger', 'telegram', 'discord']);
 
-    // Valid permutation is preserved and decoupled from DEFAULT_PREFS
+    // Valid permutation and boolean topbarPinned are preserved and decoupled from DEFAULT_PREFS
     const valid = sanitizeWorkspacePrefs({
       slotOrder: ['discord', 'zalo', 'messenger', 'telegram'],
-      mainWidthPct: 55
+      mainWidthPct: 55,
+      topbarPinned: true
     });
     expect(valid.slotOrder).toEqual(['discord', 'zalo', 'messenger', 'telegram']);
     expect(valid.mainWidthPct).toBe(55);
+    expect(valid.topbarPinned).toBe(true);
     valid.slotOrder[0] = 'zalo';
     expect(DEFAULT_PREFS.slotOrder).toEqual(['zalo', 'messenger', 'telegram', 'discord']);
+  });
+
+  it('formats split ratio label with clamped main and sub percentages', () => {
+    expect(formatSplitRatio(66)).toBe('Chính 66% • Phụ 34%');
+    expect(formatSplitRatio(52)).toBe('Chính 52% • Phụ 48%');
+    expect(formatSplitRatio(20)).toBe('Chính 45% • Phụ 55%');
+    expect(formatSplitRatio(95)).toBe('Chính 80% • Phụ 20%');
+  });
+
+  it('detects Alt+M and macOS Option+M maximize shortcut', () => {
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        code: 'KeyM',
+        key: 'm'
+      })
+    ).toBe(true);
+    // macOS Option+M produces 'µ' in ev.key with 'KeyM' in ev.code
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        code: 'KeyM',
+        key: 'µ'
+      })
+    ).toBe(true);
+    // Synthetic event with empty code falls back to ev.key
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        code: '',
+        key: 'm'
+      })
+    ).toBe(true);
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        code: '',
+        key: 'M'
+      })
+    ).toBe(true);
+
+    // Reject missing altKey, extra modifiers, or non-M keys
+    expect(
+      isAltMaximizeShortcut({
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        code: 'KeyM',
+        key: 'm'
+      })
+    ).toBe(false);
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: true,
+        metaKey: false,
+        shiftKey: false,
+        code: 'KeyM',
+        key: 'm'
+      })
+    ).toBe(false);
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: true,
+        shiftKey: false,
+        code: 'KeyM',
+        key: 'm'
+      })
+    ).toBe(false);
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: true,
+        code: 'KeyM',
+        key: 'M'
+      })
+    ).toBe(false);
+    expect(
+      isAltMaximizeShortcut({
+        altKey: true,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        code: 'KeyN',
+        key: 'n'
+      })
+    ).toBe(false);
   });
 
   it('extracts Alt/Option+1..4 shortcut digits across Playwright and macOS hardware keyboards', () => {
@@ -234,6 +355,82 @@ describe('BentoState pure functions', () => {
       })
     ).toBeNull();
   });
+
+  it('updates dynamic workspace favicon for unread=0, mocked 2D canvas badge, and null getContext fallback', () => {
+    // 1) totalUnread = 0 creates link#workspace-favicon pointing to icons/icon-32.png
+    updateWorkspaceFavicon(document, 0);
+    const link = document.querySelector<HTMLLinkElement>('link#workspace-favicon')!;
+    expect(link).not.toBeNull();
+    expect(link.rel).toBe('icon');
+    expect(link.type).toBe('image/png');
+    expect(link.getAttribute('href')).toBe('icons/icon-32.png');
+
+    // 2) Clean fallback when getContext('2d') returns null in jsdom
+    link.href = 'data:image/png;base64,stale';
+    updateWorkspaceFavicon(document, 3);
+    expect(link.getAttribute('href')).toBe('icons/icon-32.png');
+
+    // 3) Draws Bento quadrants + red unread badge onto mocked 2D canvas context when totalUnread > 0
+    const fillText = vi.fn();
+    const roundRect = vi.fn();
+    const arc = vi.fn();
+    const mockCtx = {
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 0,
+      font: '',
+      textAlign: 'start',
+      textBaseline: 'alphabetic',
+      beginPath: vi.fn(),
+      roundRect,
+      fill: vi.fn(),
+      arc,
+      stroke: vi.fn(),
+      fillText
+    } as unknown as CanvasRenderingContext2D;
+
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(mockCtx as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
+      'data:image/png;base64,bW9ja2Zhdmljb24='
+    );
+
+    updateWorkspaceFavicon(document, 4);
+    expect(roundRect).toHaveBeenCalledTimes(5);
+    expect(arc).toHaveBeenCalledTimes(1);
+    expect(fillText).toHaveBeenCalledWith('4', 48, 17);
+    expect(link.getAttribute('href')).toBe('data:image/png;base64,bW9ja2Zhdmljb24=');
+
+    updateWorkspaceFavicon(document, 14);
+    expect(fillText).toHaveBeenLastCalledWith('9+', 48, 17);
+    expect(link.href.startsWith('data:image/png')).toBe(true);
+
+    // 4) Resetting totalUnread to 0 restores static 32px icon
+    updateWorkspaceFavicon(document, 0);
+    expect(link.getAttribute('href')).toBe('icons/icon-32.png');
+  });
+
+  it('creates inline brand and action SVGs in the SVG namespace without external assets', () => {
+    for (const id of ['zalo', 'messenger', 'telegram', 'discord'] as const) {
+      const svg = createBrandIconSvg(id);
+      expect(svg.namespaceURI).toBe('http://www.w3.org/2000/svg');
+      expect(svg.getAttribute('width')).toBe('15');
+      expect(svg.classList.contains(`brand-icon-${id}`)).toBe(true);
+    }
+    for (const kind of [
+      'maximize',
+      'restore',
+      'pause',
+      'play',
+      'reload',
+      'reauth',
+      'pin'
+    ] as const) {
+      const svg = createActionIconSvg(kind);
+      expect(svg.namespaceURI).toBe('http://www.w3.org/2000/svg');
+      expect(svg.getAttribute('width')).toBe('13');
+      expect(svg.classList.contains(`action-icon-${kind}`)).toBe(true);
+    }
+  });
 });
 
 describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls, runtime messages)', () => {
@@ -243,7 +440,9 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     const html = readFileSync(workspaceHtmlPath, 'utf8');
     const parsed = new DOMParser().parseFromString(html, 'text/html');
     document.title = parsed.title;
+    document.head.innerHTML = parsed.head.innerHTML;
     document.body.className = '';
+    document.body.removeAttribute('data-maximized');
     document.body.innerHTML = parsed.body.innerHTML;
     document.body.querySelector('script[src="workspace.js"]')?.remove();
   }
@@ -257,7 +456,10 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
   afterEach(() => {
     window.dispatchEvent(new Event('pagehide'));
     window.history.replaceState(null, '', '/workspace.html');
+    document.head.innerHTML = '';
     document.body.innerHTML = '';
+    document.body.className = '';
+    document.body.removeAttribute('data-maximized');
     document.documentElement.removeAttribute('style');
     vi.unstubAllGlobals();
     vi.resetModules();
@@ -403,7 +605,7 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     // Duplicate external tab banner populated on startup and clears on click
     const dupBtn = document.getElementById('dup-tabs-btn')!;
     expect(dupBtn.classList.contains('hidden')).toBe(false);
-    expect(dupBtn.textContent).toBe('Dong 1 tab chat trung ben ngoai');
+    expect(dupBtn.textContent).toBe('Đóng 1 tab trùng');
     dupBtn.click();
     expect(sentRuntime).toContainEqual({ type: 'CLOSE_DUP_TABS' });
     expect(dupBtn.classList.contains('hidden')).toBe(true);
@@ -471,13 +673,31 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
       discordPane.querySelector('.paused-overlay')!.classList.contains('hidden')
     ).toBe(false);
 
-    // Pause Telegram -> about:blank + overlay shown
-    const tgControls = telegramPane.querySelectorAll<HTMLButtonElement>('.pane-controls button');
-    const tgReauthBtn = tgControls[0]!;
-    const tgPauseBtn = tgControls[1]!;
+    // Verify all 4 SVG action buttons exist via data-action and zero debug fps text in headers
+    const tgPauseBtn = telegramPane.querySelector<HTMLButtonElement>(
+      'button[data-action="pause"]'
+    )!;
+    const tgReauthBtn = telegramPane.querySelector<HTMLButtonElement>(
+      'button[data-action="reauth"]'
+    )!;
+    const tgMaximizeBtn = telegramPane.querySelector<HTMLButtonElement>(
+      'button[data-action="maximize"]'
+    )!;
+    const tgReloadBtn = telegramPane.querySelector<HTMLButtonElement>(
+      'button[data-action="reload"]'
+    )!;
+    expect(tgMaximizeBtn).not.toBeNull();
+    expect(tgReloadBtn).not.toBeNull();
+    for (const header of grid.querySelectorAll('.pane-header')) {
+      expect(header.textContent).not.toContain('Main 60fps');
+      expect(header.textContent).not.toContain('Sub 2fps');
+    }
+
+    // Pause Telegram -> about:blank + overlay shown + aria-label & data-paused updated
     tgPauseBtn.click();
     expect(telegramIframe.src).toBe('about:blank');
-    expect(tgPauseBtn.textContent).toBe('Resume');
+    expect(tgPauseBtn.dataset.paused).toBe('true');
+    expect(tgPauseBtn.getAttribute('aria-label')).toBe('Mở lại khung');
     expect(
       telegramPane.querySelector('.paused-overlay')!.classList.contains('hidden')
     ).toBe(false);
@@ -525,7 +745,7 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     expect(sentRuntime.filter((m) => m.type === 'SYNC_PREFS')).toHaveLength(1);
     expect(focusSpy).toHaveBeenCalledTimes(1);
 
-    // Topbar toggles sync prefs to background service worker
+    // Topbar toggles sync prefs (including paused map) to background service worker
     sentRuntime.length = 0;
     document.getElementById('btn-lite-media')!.click();
     document.getElementById('btn-hide-preview')!.click();
@@ -534,7 +754,12 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
 
     expect(sentRuntime).toContainEqual({
       type: 'SYNC_PREFS',
-      prefs: { dnd: true, hidePreview: true, liteMedia: true }
+      prefs: {
+        dnd: true,
+        hidePreview: true,
+        liteMedia: true,
+        paused: { zalo: false, messenger: false, telegram: false, discord: true }
+      }
     });
     expect(sentRuntime).toContainEqual({ type: 'TEST_NOTIFY' });
 
@@ -627,9 +852,14 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
       '*'
     );
 
-    // Pause Messenger, then wake via overlay button ("Mo lai ngay")
-    const msgControls = messengerPane.querySelectorAll<HTMLButtonElement>('.pane-controls button');
-    msgControls[1]!.click();
+    // Pause Messenger, then wake via overlay button ("Mở lại ngay")
+    const msgPauseBtn = messengerPane.querySelector<HTMLButtonElement>(
+      'button[data-action="pause"]'
+    )!;
+    const msgReloadBtn = messengerPane.querySelector<HTMLButtonElement>(
+      'button[data-action="reload"]'
+    )!;
+    msgPauseBtn.click();
     expect(messengerIframe.src).toBe('about:blank');
     messengerPane
       .querySelector<HTMLButtonElement>('.paused-overlay button')!
@@ -637,9 +867,15 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     expect(messengerIframe.src).toBe('https://www.messenger.com/');
 
     // Pause Messenger again, then RELOAD_PROVIDER wakes it back up
-    msgControls[1]!.click();
+    msgPauseBtn.click();
     expect(messengerIframe.src).toBe('about:blank');
     runtimeListeners[0]?.({ type: 'RELOAD_PROVIDER', providerId: 'messenger' });
+    expect(messengerIframe.src).toBe('https://www.messenger.com/');
+
+    // Reload button also wakes a paused pane directly
+    msgPauseBtn.click();
+    expect(messengerIframe.src).toBe('about:blank');
+    msgReloadBtn.click();
     expect(messengerIframe.src).toBe('https://www.messenger.com/');
 
     // DUP_TABS_CHANGED toggles banner visibility
@@ -652,7 +888,7 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
       ]
     });
     expect(dupBtn.classList.contains('hidden')).toBe(false);
-    expect(dupBtn.textContent).toBe('Dong 2 tab chat trung ben ngoai');
+    expect(dupBtn.textContent).toBe('Đóng 2 tab trùng');
     runtimeListeners[0]?.({ type: 'DUP_TABS_CHANGED', tabs: [] });
     expect(dupBtn.classList.contains('hidden')).toBe(true);
 
@@ -749,5 +985,114 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     resolveStorage({});
     await flushMicrotasks();
     expect(document.querySelectorAll('section.pane')).toHaveLength(0);
+  });
+
+  it('supports Auto-Hide Topbar pinning, Zero-Scroll-Loss Maximize 100% (button, Alt+M, Esc), splitter dblclick reset, and active-pane focus tracking', async () => {
+    loadWorkspaceMarkup();
+
+    const storedState: Record<string, unknown> = {};
+    const sentRuntime: RuntimeMessage[] = [];
+    const runtimeListeners: Array<(msg: RuntimeMessage) => void> = [];
+
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storedState[key] })),
+          set: vi.fn(async (items: Record<string, unknown>) => {
+            Object.assign(storedState, items);
+          })
+        }
+      },
+      runtime: {
+        sendMessage: vi.fn((msg: RuntimeMessage, cb?: (res: unknown) => void) => {
+          sentRuntime.push(msg);
+          cb?.({});
+        }),
+        onMessage: {
+          addListener: vi.fn((fn: (msg: RuntimeMessage) => void) => {
+            runtimeListeners.push(fn);
+          }),
+          removeListener: vi.fn()
+        },
+        lastError: undefined
+      }
+    });
+
+    await import('../../src/workspace/workspace');
+    await flushMicrotasks();
+
+    // 1) Topbar defaults to unpinned auto-hide, clicking #btn-pin-topbar pins and persists topbarPinned
+    expect(document.body.classList.contains('topbar-pinned')).toBe(false);
+    const pinBtn = document.getElementById('btn-pin-topbar')!;
+    pinBtn.click();
+    expect(document.body.classList.contains('topbar-pinned')).toBe(true);
+    expect((storedState.dia_bento_prefs_v1 as WorkspacePrefs).topbarPinned).toBe(true);
+
+    // 2) Brand SVG icon and 4 SVG action buttons exist in every header with zero debug fps text
+    const msgrPane = document.querySelector<HTMLElement>('section.pane[data-provider="messenger"]')!;
+    expect(msgrPane.querySelector('svg.brand-icon')).not.toBeNull();
+    expect(msgrPane.querySelector('.pane-header')!.textContent).not.toContain('2fps');
+
+    // 3) Maximize Messenger via button -> body[data-maximized="messenger"], Escape exits Maximize without DOM reparenting
+    const msgrMaxBtn = msgrPane.querySelector<HTMLButtonElement>('button[data-action="maximize"]')!;
+    msgrMaxBtn.click();
+    expect(document.body.dataset.maximized).toBe('messenger');
+    expect(msgrPane.dataset.maximized).toBe('true');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }));
+    expect(document.body.dataset.maximized).toBeUndefined();
+    expect(msgrPane.dataset.maximized).toBeUndefined();
+
+    // Note: maximizing Messenger set activeProvider = 'messenger'; focus Zalo first so active pane is 'zalo'
+    runtimeListeners[0]?.({ type: 'ACTIVE_PROVIDER_CHANGED', providerId: 'zalo' });
+
+    // Alt+M (macOS Option+M: code KeyM, key 'µ') toggles Maximize on currently active pane (zalo)
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { altKey: true, code: 'KeyM', key: 'µ', cancelable: true })
+    );
+    expect(document.body.dataset.maximized).toBe('zalo');
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { altKey: true, code: 'KeyM', key: 'µ', cancelable: true })
+    );
+    expect(document.body.dataset.maximized).toBeUndefined();
+
+    // 4) Splitter drag updates #resize-indicator and double-click resets --main-width to 66%
+    Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true });
+    const resizer = document.getElementById('grid-resizer')!;
+    resizer.dispatchEvent(new MouseEvent('mousedown', { clientX: 660, bubbles: true }));
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 520 }));
+    expect(document.getElementById('resize-indicator')!.textContent).toBe('Chính 52% • Phụ 48%');
+    window.dispatchEvent(new MouseEvent('mouseup'));
+
+    resizer.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(document.documentElement.style.getPropertyValue('--main-width')).toBe('66%');
+    expect((storedState.dia_bento_prefs_v1 as WorkspacePrefs).mainWidthPct).toBe(66);
+
+    // 5) ACTIVE_PROVIDER_CHANGED moves data-active="true" to sub-pane without swapping slots
+    runtimeListeners[0]?.({ type: 'ACTIVE_PROVIDER_CHANGED', providerId: 'telegram' });
+    const tgPane = document.querySelector<HTMLElement>('section.pane[data-provider="telegram"]')!;
+    const zaloPane = document.querySelector<HTMLElement>('section.pane[data-provider="zalo"]')!;
+    expect(tgPane.dataset.active).toBe('true');
+    expect(zaloPane.dataset.active).toBe('false');
+    expect(zaloPane.dataset.slot).toBe('main');
+
+    // Window blur while Discord iframe is document.activeElement moves data-active="true" to Discord
+    const discordPane = document.querySelector<HTMLElement>(
+      'section.pane[data-provider="discord"]'
+    )!;
+    const discordIframe = discordPane.querySelector<HTMLIFrameElement>('iframe.pane-iframe')!;
+    const origActiveEl = Object.getOwnPropertyDescriptor(document, 'activeElement');
+    Object.defineProperty(document, 'activeElement', {
+      value: discordIframe,
+      configurable: true
+    });
+    window.dispatchEvent(new Event('blur'));
+    if (origActiveEl) {
+      Object.defineProperty(document, 'activeElement', origActiveEl);
+    } else {
+      Reflect.deleteProperty(document, 'activeElement');
+    }
+    expect(discordPane.dataset.active).toBe('true');
+    expect(tgPane.dataset.active).toBe('false');
   });
 });

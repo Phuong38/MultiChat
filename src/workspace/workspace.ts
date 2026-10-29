@@ -12,11 +12,15 @@ import {
   SLOT_IDS,
   clampMainWidth,
   extractAltShortcutDigit,
+  formatSplitRatio,
   formatWorkspaceTitle,
+  isAltMaximizeShortcut,
   resolveEmbedUrl,
   sanitizeWorkspacePrefs,
   swapProviderToMain
 } from './bento-state';
+import { createActionIconSvg, createBrandIconSvg } from './icons';
+import { updateWorkspaceFavicon } from './favicon';
 
 const STORAGE_KEY = 'dia_bento_prefs_v1';
 const SANDBOX_FLAGS =
@@ -26,7 +30,7 @@ const ALLOW_PERMS = 'clipboard-read; clipboard-write; microphone; camera';
 interface PaneDom {
   section: HTMLElement;
   unreadBadge: HTMLElement;
-  modeTag: HTMLElement;
+  maximizeBtn: HTMLButtonElement;
   pauseBtn: HTMLButtonElement;
   pausedOverlay: HTMLElement;
   iframe: HTMLIFrameElement;
@@ -37,6 +41,9 @@ const testOrigin = searchParams.get('testOrigin');
 const lifecycle = new AbortController();
 
 let prefs: WorkspacePrefs = sanitizeWorkspacePrefs(null);
+let activeProvider: ProviderId = prefs.slotOrder[0];
+let maximizedProvider: ProviderId | null = null;
+
 const unreads: Record<ProviderId, number> = {
   zalo: 0,
   messenger: 0,
@@ -61,8 +68,10 @@ async function loadPrefs(): Promise<void> {
   try {
     const stored = await chrome.storage.local.get(STORAGE_KEY);
     prefs = sanitizeWorkspacePrefs(stored?.[STORAGE_KEY]);
+    activeProvider = prefs.slotOrder[0];
   } catch {
     prefs = sanitizeWorkspacePrefs(null);
+    activeProvider = prefs.slotOrder[0];
   }
 }
 
@@ -75,7 +84,8 @@ function savePrefs(): void {
     prefs: {
       dnd: prefs.dnd,
       hidePreview: prefs.hidePreview,
-      liteMedia: prefs.liteMedia
+      liteMedia: prefs.liteMedia,
+      paused: { ...prefs.paused }
     }
   });
 }
@@ -92,32 +102,74 @@ function postSlotMode(providerId: ProviderId, isMain: boolean): void {
   pane.iframe.contentWindow?.postMessage(msg, '*');
 }
 
+function updatePauseButtonIcon(btn: HTMLButtonElement, paused: boolean): void {
+  btn.dataset.paused = paused ? 'true' : 'false';
+  const label = paused ? 'Mở lại khung' : 'Tạm dừng khung (0 MB RAM)';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.classList.toggle('is-active', paused);
+  btn.replaceChildren(createActionIconSvg(paused ? 'play' : 'pause'));
+}
+
+function updateMaximizeButtonIcon(btn: HTMLButtonElement, isMaximized: boolean): void {
+  const label = isMaximized ? 'Thu về lưới Bento (Esc)' : 'Phóng to khung này (Alt+M)';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.classList.toggle('is-active', isMaximized);
+  btn.replaceChildren(createActionIconSvg(isMaximized ? 'restore' : 'maximize'));
+}
+
+function isWorkspaceWindowFocused(): boolean {
+  if (document.visibilityState !== 'visible') return false;
+  return document.hasFocus() || document.activeElement instanceof HTMLIFrameElement;
+}
+
+function reportFocusState(): void {
+  for (const [id, pane] of panes.entries()) {
+    pane.section.dataset.active = id === activeProvider ? 'true' : 'false';
+  }
+  sendRuntime({
+    type: 'WORKSPACE_FOCUS_STATE',
+    windowFocused: isWorkspaceWindowFocused(),
+    focusedProvider: activeProvider
+  });
+}
+
 function applyLayout(): void {
   document.documentElement.style.setProperty('--main-width', `${prefs.mainWidthPct}%`);
+  document.body.classList.toggle('topbar-pinned', prefs.topbarPinned);
+
+  if (maximizedProvider && !prefs.paused[maximizedProvider]) {
+    document.body.dataset.maximized = maximizedProvider;
+  } else {
+    maximizedProvider = null;
+    delete document.body.dataset.maximized;
+  }
 
   prefs.slotOrder.forEach((providerId, index) => {
     const slot: SlotId = SLOT_IDS[index] ?? 'sub-3';
     const pane = panes.get(providerId);
     if (!pane) return;
     pane.section.dataset.slot = slot;
-    const isMain = slot === 'main';
-    pane.modeTag.textContent = prefs.paused[providerId]
-      ? 'Paused'
-      : isMain
-        ? 'Main 60fps'
-        : 'Sub 2fps';
-    postSlotMode(providerId, isMain);
+
+    const isMax = maximizedProvider === providerId;
+    if (isMax) {
+      pane.section.dataset.maximized = 'true';
+    } else {
+      delete pane.section.dataset.maximized;
+    }
+    updateMaximizeButtonIcon(pane.maximizeBtn, isMax);
+
+    const effectiveMain = maximizedProvider ? isMax : slot === 'main';
+    postSlotMode(providerId, effectiveMain);
   });
 
   document.getElementById('btn-lite-media')?.classList.toggle('active', prefs.liteMedia);
   document.getElementById('btn-hide-preview')?.classList.toggle('active', prefs.hidePreview);
   document.getElementById('btn-dnd')?.classList.toggle('active', prefs.dnd);
+  document.getElementById('btn-pin-topbar')?.classList.toggle('active', prefs.topbarPinned);
 
-  sendRuntime({
-    type: 'WORKSPACE_FOCUS_STATE',
-    windowFocused: document.visibilityState === 'visible' && document.hasFocus(),
-    focusedProvider: prefs.slotOrder[0]
-  });
+  reportFocusState();
 }
 
 function updateUnreadUi(): void {
@@ -130,27 +182,33 @@ function updateUnreadUi(): void {
     pane.unreadBadge.textContent = String(count);
     pane.unreadBadge.classList.toggle('hidden', count <= 0);
   }
-  const totalBadge = document.getElementById('total-unread');
-  if (totalBadge) {
-    totalBadge.textContent = String(total);
-    totalBadge.classList.toggle('hidden', total <= 0);
+  for (const badgeId of ['total-unread', 'pill-unread']) {
+    const el = document.getElementById(badgeId);
+    if (el) {
+      el.textContent = String(total);
+      el.classList.toggle('hidden', total <= 0);
+    }
   }
+  document.body.classList.toggle('has-unread', total > 0);
   document.title = formatWorkspaceTitle(unreads);
+  updateWorkspaceFavicon(document, total);
 }
 
 function setPausedDom(providerId: ProviderId, paused: boolean): void {
   const pane = panes.get(providerId);
   if (!pane) return;
   prefs.paused[providerId] = paused;
+  updatePauseButtonIcon(pane.pauseBtn, paused);
   if (paused) {
+    if (maximizedProvider === providerId) {
+      maximizedProvider = null;
+    }
     pane.iframe.src = 'about:blank';
     pane.pausedOverlay.classList.remove('hidden');
-    pane.pauseBtn.textContent = 'Resume';
     unreads[providerId] = 0;
     updateUnreadUi();
   } else {
     pane.pausedOverlay.classList.add('hidden');
-    pane.pauseBtn.textContent = 'Pause';
     pane.iframe.src = resolveEmbedUrl(providerId, testOrigin);
   }
 }
@@ -159,11 +217,33 @@ function focusProvider(providerId: ProviderId): void {
   if (prefs.paused[providerId]) {
     setPausedDom(providerId, false);
   }
+  activeProvider = providerId;
+  if (maximizedProvider && maximizedProvider !== providerId) {
+    maximizedProvider = providerId;
+  }
   prefs.slotOrder = swapProviderToMain(prefs.slotOrder, providerId);
   applyLayout();
   savePrefs();
   if (!prefs.paused[providerId]) {
     panes.get(providerId)?.iframe.focus();
+  }
+}
+
+function toggleMaximize(targetProvider?: ProviderId): void {
+  const candidate = targetProvider ?? activeProvider ?? prefs.slotOrder[0];
+  if (maximizedProvider === candidate) {
+    maximizedProvider = null;
+  } else {
+    if (prefs.paused[candidate]) {
+      setPausedDom(candidate, false);
+      savePrefs();
+    }
+    maximizedProvider = candidate;
+    activeProvider = candidate;
+  }
+  applyLayout();
+  if (maximizedProvider && !prefs.paused[maximizedProvider]) {
+    panes.get(maximizedProvider)?.iframe.focus();
   }
 }
 
@@ -189,6 +269,9 @@ function mountPanes(): void {
   const grid = document.getElementById('bento-grid');
   if (!grid) return;
 
+  const pinBtn = document.getElementById('btn-pin-topbar');
+  pinBtn?.replaceChildren(createActionIconSvg('pin'));
+
   for (const providerId of PROVIDER_ORDER) {
     const cfg = PROVIDERS[providerId];
     const section = document.createElement('section');
@@ -202,43 +285,66 @@ function mountPanes(): void {
     const titleBtn = document.createElement('button');
     titleBtn.type = 'button';
     titleBtn.className = 'pane-title-btn';
-    titleBtn.title = `Dua ${cfg.name} len khung chinh (Alt+${cfg.shortcutIndex})`;
+    titleBtn.title = `Đưa ${cfg.name} lên khung chính (⌥${cfg.shortcutIndex})`;
     titleBtn.addEventListener('click', () => focusProvider(providerId));
 
+    const brandSvg = createBrandIconSvg(providerId, 15);
     const nameSpan = document.createElement('span');
-    nameSpan.textContent = `${cfg.name} (Alt+${cfg.shortcutIndex})`;
+    nameSpan.className = 'pane-name';
+    nameSpan.textContent = cfg.name;
 
     const unreadBadge = document.createElement('span');
     unreadBadge.className = 'badge hidden';
     unreadBadge.textContent = '0';
 
-    titleBtn.append(nameSpan, unreadBadge);
+    const kbdChip = document.createElement('span');
+    kbdChip.className = 'kbd-chip';
+    kbdChip.textContent = `⌥${cfg.shortcutIndex}`;
+
+    const focusDot = document.createElement('span');
+    focusDot.className = 'pane-focus-dot';
+    focusDot.title = 'Khung đang tương tác';
+
+    titleBtn.append(brandSvg, nameSpan, unreadBadge, kbdChip, focusDot);
 
     const controls = document.createElement('div');
     controls.className = 'pane-controls';
 
-    const modeTag = document.createElement('span');
-    modeTag.className = 'hint';
-
-    const reauthBtn = document.createElement('button');
-    reauthBtn.type = 'button';
-    reauthBtn.textContent = 'Re-Auth';
-    reauthBtn.addEventListener('click', () =>
-      sendRuntime({ type: 'OPEN_REAUTH', providerId })
-    );
+    const maximizeBtn = document.createElement('button');
+    maximizeBtn.type = 'button';
+    maximizeBtn.className = 'icon-btn';
+    maximizeBtn.dataset.action = 'maximize';
+    updateMaximizeButtonIcon(maximizeBtn, false);
+    maximizeBtn.addEventListener('click', () => toggleMaximize(providerId));
 
     const pauseBtn = document.createElement('button');
     pauseBtn.type = 'button';
-    pauseBtn.textContent = prefs.paused[providerId] ? 'Resume' : 'Pause';
+    pauseBtn.className = 'icon-btn';
+    pauseBtn.dataset.action = 'pause';
+    updatePauseButtonIcon(pauseBtn, prefs.paused[providerId]);
     pauseBtn.addEventListener('click', () => togglePause(providerId));
 
     const reloadBtn = document.createElement('button');
     reloadBtn.type = 'button';
-    reloadBtn.textContent = '↻';
-    reloadBtn.title = 'Reload khung nay';
+    reloadBtn.className = 'icon-btn';
+    reloadBtn.dataset.action = 'reload';
+    reloadBtn.title = 'Tải lại khung này';
+    reloadBtn.setAttribute('aria-label', 'Tải lại khung này');
+    reloadBtn.appendChild(createActionIconSvg('reload'));
     reloadBtn.addEventListener('click', () => reloadProvider(providerId));
 
-    controls.append(modeTag, reauthBtn, pauseBtn, reloadBtn);
+    const reauthBtn = document.createElement('button');
+    reauthBtn.type = 'button';
+    reauthBtn.className = 'icon-btn';
+    reauthBtn.dataset.action = 'reauth';
+    reauthBtn.title = 'Đăng nhập lại (Mở cửa sổ xác thực)';
+    reauthBtn.setAttribute('aria-label', 'Đăng nhập lại');
+    reauthBtn.appendChild(createActionIconSvg('reauth'));
+    reauthBtn.addEventListener('click', () =>
+      sendRuntime({ type: 'OPEN_REAUTH', providerId })
+    );
+
+    controls.append(maximizeBtn, pauseBtn, reloadBtn, reauthBtn);
     header.append(titleBtn, controls);
 
     const body = document.createElement('div');
@@ -250,19 +356,22 @@ function mountPanes(): void {
     iframe.setAttribute('allow', ALLOW_PERMS);
     iframe.src = prefs.paused[providerId] ? 'about:blank' : resolveEmbedUrl(providerId, testOrigin);
     iframe.addEventListener('load', () => {
-      const isMain = prefs.slotOrder[0] === providerId;
-      postSlotMode(providerId, isMain);
+      const effectiveMain = maximizedProvider
+        ? maximizedProvider === providerId
+        : prefs.slotOrder[0] === providerId;
+      postSlotMode(providerId, effectiveMain);
     });
 
     const pausedOverlay = document.createElement('div');
     pausedOverlay.className = `paused-overlay ${prefs.paused[providerId] ? '' : 'hidden'}`.trim();
+    const pausedLogo = createBrandIconSvg(providerId, 28);
     const pausedLabel = document.createElement('span');
-    pausedLabel.textContent = `${cfg.name} dang ngu tam (0 MB Renderer RAM)`;
+    pausedLabel.textContent = `${cfg.name} đang tạm dừng (0 MB RAM)`;
     const wakeBtn = document.createElement('button');
     wakeBtn.type = 'button';
-    wakeBtn.textContent = 'Mo lai ngay';
+    wakeBtn.textContent = 'Mở lại ngay';
     wakeBtn.addEventListener('click', () => togglePause(providerId, false));
-    pausedOverlay.append(pausedLabel, wakeBtn);
+    pausedOverlay.append(pausedLogo, pausedLabel, wakeBtn);
 
     body.append(iframe, pausedOverlay);
     section.append(header, body);
@@ -271,7 +380,7 @@ function mountPanes(): void {
     panes.set(providerId, {
       section,
       unreadBadge,
-      modeTag,
+      maximizeBtn,
       pauseBtn,
       pausedOverlay,
       iframe
@@ -282,11 +391,12 @@ function mountPanes(): void {
 function updateDupTabsBanner(tabs: ExternalProviderTab[]): void {
   const btn = document.getElementById('dup-tabs-btn') as HTMLButtonElement | null;
   if (!btn) return;
+  document.body.classList.toggle('has-dup-tabs', tabs.length > 0);
   if (tabs.length === 0) {
     btn.classList.add('hidden');
     return;
   }
-  btn.textContent = `Dong ${tabs.length} tab chat trung ben ngoai`;
+  btn.textContent = `Đóng ${tabs.length} tab trùng`;
   btn.classList.remove('hidden');
 }
 
@@ -316,6 +426,11 @@ function onRuntimeMessage(
         : 0;
     unreads[msg.providerId] = nextCount;
     updateUnreadUi();
+  } else if (msg.type === 'ACTIVE_PROVIDER_CHANGED') {
+    if (Object.hasOwn(PROVIDERS, msg.providerId) && !prefs.paused[msg.providerId]) {
+      activeProvider = msg.providerId;
+      reportFocusState();
+    }
   } else if (msg.type === 'FOCUS_PROVIDER') {
     if (Object.hasOwn(PROVIDERS, msg.providerId)) {
       focusProvider(msg.providerId);
@@ -333,6 +448,19 @@ function onRuntimeMessage(
       updateDupTabsBanner(msg.tabs);
     }
   }
+}
+
+function detectFocusedIframeOnBlur(): void {
+  const activeEl = document.activeElement;
+  if (activeEl instanceof HTMLIFrameElement) {
+    for (const [id, pane] of panes.entries()) {
+      if (pane.iframe === activeEl && !prefs.paused[id]) {
+        activeProvider = id;
+        break;
+      }
+    }
+  }
+  reportFocusState();
 }
 
 function bindEvents(): void {
@@ -356,6 +484,12 @@ function bindEvents(): void {
     savePrefs();
   });
 
+  document.getElementById('btn-pin-topbar')?.addEventListener('click', () => {
+    prefs.topbarPinned = !prefs.topbarPinned;
+    applyLayout();
+    savePrefs();
+  });
+
   document.getElementById('btn-test-notify')?.addEventListener('click', () => {
     sendRuntime({ type: 'TEST_NOTIFY' });
   });
@@ -368,6 +502,17 @@ function bindEvents(): void {
     'keydown',
     (ev: KeyboardEvent) => {
       if (ev.repeat) return;
+      if (ev.key === 'Escape' && maximizedProvider !== null) {
+        ev.preventDefault();
+        maximizedProvider = null;
+        applyLayout();
+        return;
+      }
+      if (isAltMaximizeShortcut(ev)) {
+        ev.preventDefault();
+        toggleMaximize();
+        return;
+      }
       const digit = extractAltShortcutDigit(ev);
       if (digit !== null) {
         ev.preventDefault();
@@ -378,25 +523,41 @@ function bindEvents(): void {
     { signal }
   );
 
-  window.addEventListener('focus', () => applyLayout(), { signal });
-  window.addEventListener('blur', () => applyLayout(), { signal });
-  document.addEventListener('visibilitychange', () => applyLayout(), { signal });
+  window.addEventListener('focus', () => reportFocusState(), { signal });
+  window.addEventListener('blur', () => detectFocusedIframeOnBlur(), { signal });
+  document.addEventListener('visibilitychange', () => reportFocusState(), { signal });
 
   const resizer = document.getElementById('grid-resizer');
+  const indicator = document.getElementById('resize-indicator');
+
+  resizer?.addEventListener('dblclick', () => {
+    prefs.mainWidthPct = 66;
+    document.documentElement.style.setProperty('--main-width', '66%');
+    savePrefs();
+  });
+
   resizer?.addEventListener('mousedown', (startEv) => {
     startEv.preventDefault();
     document.body.classList.add('resizing');
+    if (indicator) {
+      indicator.textContent = formatSplitRatio(prefs.mainWidthPct);
+      indicator.classList.remove('hidden');
+    }
     let ended = false;
     const onMove = (moveEv: MouseEvent) => {
       if (window.innerWidth <= 0) return;
       const pct = (moveEv.clientX / window.innerWidth) * 100;
       prefs.mainWidthPct = clampMainWidth(pct);
       document.documentElement.style.setProperty('--main-width', `${prefs.mainWidthPct}%`);
+      if (indicator) {
+        indicator.textContent = formatSplitRatio(prefs.mainWidthPct);
+      }
     };
     const onUp = () => {
       if (ended) return;
       ended = true;
       document.body.classList.remove('resizing');
+      indicator?.classList.add('hidden');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('blur', onUp);
