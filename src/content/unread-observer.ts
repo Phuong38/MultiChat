@@ -24,8 +24,9 @@ export class UnreadFallbackTracker {
 
     if (this.recentRawNotifyAt !== null) {
       const elapsed = Date.now() - this.recentRawNotifyAt;
+      const suppressionWindowMs = Math.max(this.fallbackDelayMs * 4, 6000);
       this.recentRawNotifyAt = null;
-      if (elapsed >= 0 && elapsed < this.fallbackDelayMs) {
+      if (elapsed >= 0 && elapsed < suppressionWindowMs) {
         return;
       }
     }

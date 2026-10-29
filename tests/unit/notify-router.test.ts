@@ -176,7 +176,9 @@ function createChromeMock(sharedSessionStore: Record<string, unknown> = {}) {
   >();
   const onTabUpdated = createEventHook<[number, chrome.tabs.TabChangeInfo]>();
   const onTabRemoved = createEventHook<[number]>();
+  const onTabActivated = createEventHook<[chrome.tabs.TabActiveInfo]>();
   const onWindowRemoved = createEventHook<[number]>();
+  const onWindowFocusChanged = createEventHook<[number]>();
   const onNotificationClicked = createEventHook<[string]>();
   const onMessage = createEventHook<
     [RuntimeMessage, chrome.runtime.MessageSender, (res?: unknown) => void]
@@ -205,6 +207,7 @@ function createChromeMock(sharedSessionStore: Record<string, unknown> = {}) {
     }
   );
 
+  const windowsGet = vi.fn().mockResolvedValue({ id: 1, focused: true });
   const windowsUpdate = vi.fn().mockResolvedValue({});
   const windowsCreate = vi.fn().mockResolvedValue({ id: 501 });
 
@@ -250,12 +253,16 @@ function createChromeMock(sharedSessionStore: Record<string, unknown> = {}) {
       remove: tabsRemove,
       sendMessage: tabsSendMessage,
       onUpdated: onTabUpdated,
-      onRemoved: onTabRemoved
+      onRemoved: onTabRemoved,
+      onActivated: onTabActivated
     },
     windows: {
+      WINDOW_ID_NONE: -1,
+      get: windowsGet,
       update: windowsUpdate,
       create: windowsCreate,
-      onRemoved: onWindowRemoved
+      onRemoved: onWindowRemoved,
+      onFocusChanged: onWindowFocusChanged
     },
     notifications: {
       create: notificationsCreate,
@@ -287,7 +294,9 @@ function createChromeMock(sharedSessionStore: Record<string, unknown> = {}) {
       onCookieChanged,
       onTabUpdated,
       onTabRemoved,
+      onTabActivated,
       onWindowRemoved,
+      onWindowFocusChanged,
       onNotificationClicked,
       onMessage
     },
@@ -466,6 +475,9 @@ describe('MV3 background service-worker', () => {
     expect(testNotif.notifId).toMatch(/^dia-test:/);
 
     // Workspace tab 77 reports active focus on discord
+    env.chromeMock.tabs.query.mockResolvedValue([
+      { id: 77, windowId: 1, active: true, url: 'chrome-extension://ext-id/workspace.html' }
+    ]);
     await env.dispatchMessage(
       {
         type: 'WORKSPACE_FOCUS_STATE',
@@ -482,11 +494,147 @@ describe('MV3 background service-worker', () => {
     expect(suppressed.notifId).toBeNull();
 
     // Closing workspace tab 77 clears focus suppression so external notifications resume
+    env.chromeMock.tabs.query.mockResolvedValue([]);
     env.hooks.onTabRemoved.emit(77);
     const afterClose = (await env.dispatchMessage({
       type: 'CHAT_NOTIFY',
       payload: { providerId: 'discord', title: 'Mod', body: 'Hello after close' }
     })) as { notifId: string | null };
     expect(afterClose.notifId).toBeTruthy();
+  });
+
+  it('delivers main-pane notifications on tab switch or window blur despite stale WORKSPACE_FOCUS_STATE, isolates reauth cookie errors, rolls back lastError notifications, and queues cold-workspace clicks', async () => {
+    const sharedSession: Record<string, unknown> = {};
+    const env = createChromeMock(sharedSession);
+    let wsTabActive = true;
+    let browserWinFocused = true;
+
+    env.chromeMock.tabs.query.mockImplementation(async () => [
+      { id: 10, windowId: 1, active: wsTabActive, url: 'chrome-extension://ext-id/workspace.html' }
+    ]);
+    env.chromeMock.windows.get.mockImplementation(async () => ({
+      id: 1,
+      focused: browserWinFocused
+    }));
+
+    vi.stubGlobal('chrome', env.chromeMock);
+    await import('../../src/background/service-worker');
+
+    // Workspace reports windowFocused: true with zalo in slotOrder[0]
+    await env.dispatchMessage(
+      {
+        type: 'WORKSPACE_FOCUS_STATE',
+        windowFocused: true,
+        focusedProvider: 'zalo'
+      },
+      { tab: { id: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender
+    );
+
+    const suppressedWhileActive = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'zalo', title: 'Binh', body: 'Still looking', tag: 'z-1' }
+    })) as { notifId: string | null };
+    expect(suppressedWhileActive.notifId).toBeNull();
+
+    // 1) User switches away from Workspace tab after OOPIF focus (no blur fired on workspace.html)
+    wsTabActive = false;
+    env.hooks.onTabActivated.emit({ tabId: 99, windowId: 1 });
+    const deliveredOnTabSwitch = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'zalo', title: 'Binh', body: 'Switched tab', tag: 'z-2' }
+    })) as { notifId: string | null };
+    expect(deliveredOnTabSwitch.notifId).toBeTruthy();
+
+    // 2) User switches back to Workspace tab, then Cmd+Tabs to another macOS app (window unfocused)
+    wsTabActive = true;
+    browserWinFocused = true;
+    const suppressedAgain = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'zalo', title: 'Binh', body: 'Back on tab', tag: 'z-3' }
+    })) as { notifId: string | null };
+    expect(suppressedAgain.notifId).toBeNull();
+
+    browserWinFocused = false;
+    env.hooks.onWindowFocusChanged.emit(-1);
+    const deliveredOnAppBlur = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: {
+        providerId: 'zalo',
+        title: 'Binh',
+        body: 'Browser unfocused',
+        tag: 'z-4',
+        notifToken: 'cold-tok-1'
+      }
+    })) as { notifId: string | null };
+    expect(deliveredOnAppBlur.notifId).toBeTruthy();
+
+    // 3) FOCUS_PROVIDER from iframe content script forwards to workspace
+    const focusRes = await env.dispatchMessage({
+      type: 'FOCUS_PROVIDER',
+      providerId: 'telegram'
+    });
+    expect(focusRes).toEqual({ ok: true });
+    expect(env.chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'FOCUS_PROVIDER',
+      providerId: 'telegram'
+    });
+
+    // 4) chrome.notifications.create setting runtime.lastError rolls back dedup entry so retry succeeds
+    env.chromeMock.notifications.create.mockImplementationOnce((id, _opts, cb) => {
+      (env.chromeMock.runtime as { lastError?: { message: string } }).lastError = {
+        message: 'Notification center busy'
+      };
+      cb?.(id);
+      (env.chromeMock.runtime as { lastError?: { message: string } }).lastError = undefined;
+    });
+    const failedNotif = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'discord', title: 'Ops', body: 'Retryable alert', tag: 'd-retry' }
+    })) as { notifId: string | null };
+    expect(failedNotif.notifId).toBeNull();
+
+    const retriedNotif = (await env.dispatchMessage({
+      type: 'CHAT_NOTIFY',
+      payload: { providerId: 'discord', title: 'Ops', body: 'Retryable alert', tag: 'd-retry' }
+    })) as { notifId: string | null };
+    expect(retriedNotif.notifId).toBeTruthy();
+
+    // 5) Reauth window close isolates syncProviderCookies error and STILL broadcasts RELOAD_PROVIDER
+    await env.dispatchMessage({ type: 'OPEN_REAUTH', providerId: 'telegram' });
+    env.chromeMock.cookies.getAll.mockRejectedValueOnce(new Error('Cookie store locked'));
+    env.hooks.onWindowRemoved.emit(501);
+    await vi.waitFor(() => {
+      expect(env.chromeMock.runtime.sendMessage).toHaveBeenCalledWith({
+        type: 'RELOAD_PROVIDER',
+        providerId: 'telegram'
+      });
+    });
+
+    // 6) Cold-workspace notification click stores pendingClickTarget in session storage for CONSUME_PENDING_CLICK
+    env.chromeMock.tabs.query.mockResolvedValue([]);
+    env.hooks.onNotificationClicked.emit(deliveredOnAppBlur.notifId!);
+    await vi.waitFor(() => {
+      expect(env.chromeMock.tabs.create).toHaveBeenCalledWith({
+        url: 'chrome-extension://ext-id/workspace.html',
+        active: true,
+        pinned: true
+      });
+    });
+
+    // Simulate SW restart before cold-booted workspace tab finishes loading workspace.js
+    vi.resetModules();
+    const envCold = createChromeMock(sharedSession);
+    vi.stubGlobal('chrome', envCold.chromeMock);
+    await import('../../src/background/service-worker');
+
+    const consumed1 = await envCold.dispatchMessage({ type: 'CONSUME_PENDING_CLICK' });
+    expect(consumed1).toEqual({
+      target: {
+        providerId: 'zalo',
+        notifToken: 'cold-tok-1'
+      }
+    });
+    const consumed2 = await envCold.dispatchMessage({ type: 'CONSUME_PENDING_CLICK' });
+    expect(consumed2).toEqual({ target: null });
   });
 });

@@ -4,7 +4,9 @@ import type {
   RuntimeMessage,
   WorkspaceToFrameMessage
 } from '../shared/types';
+import { extractAltShortcutDigit } from '../shared/shortcuts';
 import {
+  PROVIDER_ORDER,
   PROVIDERS,
   extractUnreadFromDom,
   matchProviderByUrl,
@@ -42,6 +44,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   let domBooted = false;
   let observer: MutationObserver | null = null;
   let pollTimer: number | null = null;
+  let rawNotifySyncTimer: number | null = null;
 
   const sendToMain = (cmd: IsolatedToMainEvent): void => {
     window.dispatchEvent(new CustomEvent<string>(ISO_TO_MAIN, { detail: JSON.stringify(cmd) }));
@@ -96,6 +99,13 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     if (!parsed || typeof parsed !== 'object') return;
     if (parsed.type === 'RAW_NOTIFY') {
       fallbackTracker.onRawNotify();
+      if (rawNotifySyncTimer !== null) {
+        window.clearTimeout(rawNotifySyncTimer);
+      }
+      rawNotifySyncTimer = window.setTimeout(() => {
+        rawNotifySyncTimer = null;
+        evaluateUnread();
+      }, 250);
       const title =
         typeof parsed.title === 'string' && parsed.title
           ? parsed.title
@@ -118,14 +128,10 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   };
 
   const onWindowMessage = (ev: MessageEvent): void => {
-    if (ev.origin) {
-      if (
-        expectedExtensionOrigin
-          ? ev.origin !== expectedExtensionOrigin
-          : !ev.origin.startsWith('chrome-extension://')
-      ) {
-        return;
-      }
+    if (expectedExtensionOrigin) {
+      if (ev.origin !== expectedExtensionOrigin) return;
+    } else if (!ev.origin || !ev.origin.startsWith('chrome-extension://')) {
+      return;
     }
     const data = ev.data as
       | WorkspaceToFrameMessage
@@ -145,6 +151,18 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
       applySlotPolicy();
     } else if (data.type === 'DIA_CLICK_NOTIFY' && typeof data.notifToken === 'string') {
       sendToMain({ type: 'CLICK_NOTIFY', notifToken: data.notifToken });
+    }
+  };
+
+  const onKeyDown = (ev: KeyboardEvent): void => {
+    const digit = extractAltShortcutDigit(ev);
+    if (digit === null) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.repeat) return;
+    const target = PROVIDER_ORDER[digit - 1];
+    if (target) {
+      sendToBackground({ type: 'FOCUS_PROVIDER', providerId: target });
     }
   };
 
@@ -181,6 +199,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
 
   window.addEventListener(MAIN_TO_ISO, onMainToIso);
   window.addEventListener('message', onWindowMessage);
+  window.addEventListener('keydown', onKeyDown, true);
 
   if (document.readyState === 'loading') {
     window.addEventListener('DOMContentLoaded', bootDomObservers, { once: true });
@@ -192,6 +211,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     if (!(ev as PageTransitionEvent).persisted) {
       window.removeEventListener(MAIN_TO_ISO, onMainToIso);
       window.removeEventListener('message', onWindowMessage);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('DOMContentLoaded', bootDomObservers);
       document.documentElement?.removeEventListener('mouseenter', onMouseEnter);
       document.documentElement?.removeEventListener('mouseleave', onMouseLeave);
@@ -200,6 +220,10 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
       if (pollTimer !== null) {
         window.clearInterval(pollTimer);
         pollTimer = null;
+      }
+      if (rawNotifySyncTimer !== null) {
+        window.clearTimeout(rawNotifySyncTimer);
+        rawNotifySyncTimer = null;
       }
       fallbackTracker.dispose();
     }

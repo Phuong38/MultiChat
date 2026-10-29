@@ -1,4 +1,4 @@
-import type { ProviderId, RuntimeMessage } from '../shared/types';
+import type { PendingClickTarget, ProviderId, RuntimeMessage } from '../shared/types';
 import { PROVIDERS } from '../providers/registry';
 import {
   shouldUpgradeCookie,
@@ -11,15 +11,20 @@ import { findExternalProviderTabs, openOrFocusWorkspace } from './tab-coordinato
 const SW_PREFS_KEY = '__dia_sw_prefs';
 const SW_FOCUS_KEY = '__dia_sw_focus';
 const SW_REAUTH_KEY = '__dia_sw_reauth';
+const SW_PENDING_CLICK_KEY = '__dia_sw_pending_click';
 
 const getWorkspaceUrl = () => chrome.runtime.getURL('workspace.html');
 const getIconUrl = () => chrome.runtime.getURL('icons/icon-128.png');
 
 const router = new NotifyRouter(
   (id, opts) =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
       chrome.notifications.create(id, opts, () => {
-        void chrome.runtime.lastError;
+        const err = chrome.runtime.lastError;
+        if (err) {
+          reject(new Error(err.message || 'Failed to create notification'));
+          return;
+        }
         resolve();
       });
     }),
@@ -28,6 +33,10 @@ const router = new NotifyRouter(
 
 const reauthWindows = new Map<number, ProviderId>();
 let workspaceTabId: number | null = null;
+let currentWindowFocused = false;
+let currentFocusedProvider: ProviderId | null = null;
+let pendingClickTarget: PendingClickTarget | null = null;
+let pendingClickUpdatedInMemory = false;
 let prefsUpdatedInMemory = false;
 let focusUpdatedInMemory = false;
 let hydrationPromise: Promise<void> | null = null;
@@ -42,7 +51,12 @@ function ensureHydrated(): Promise<void> {
       const session = getSessionStorage();
       if (!session) return;
       try {
-        const data = await session.get([SW_PREFS_KEY, SW_FOCUS_KEY, SW_REAUTH_KEY]);
+        const data = await session.get([
+          SW_PREFS_KEY,
+          SW_FOCUS_KEY,
+          SW_REAUTH_KEY,
+          SW_PENDING_CLICK_KEY
+        ]);
         if (!prefsUpdatedInMemory && data[SW_PREFS_KEY]) {
           const p = data[SW_PREFS_KEY] as { dnd?: unknown; hidePreview?: unknown };
           if (typeof p.dnd === 'boolean' && typeof p.hidePreview === 'boolean') {
@@ -61,6 +75,8 @@ function ensureHydrated(): Promise<void> {
                 ? (f.focusedProvider as ProviderId)
                 : null;
             workspaceTabId = typeof f.tabId === 'number' ? f.tabId : null;
+            currentWindowFocused = f.windowFocused;
+            currentFocusedProvider = focusedProvider;
             router.setFocusState({ windowFocused: f.windowFocused, focusedProvider });
           }
         }
@@ -76,6 +92,28 @@ function ensureHydrated(): Promise<void> {
             ) {
               reauthWindows.set(winId, prov as ProviderId);
             }
+          }
+        }
+        if (
+          !pendingClickUpdatedInMemory &&
+          data[SW_PENDING_CLICK_KEY] &&
+          typeof data[SW_PENDING_CLICK_KEY] === 'object'
+        ) {
+          const rawClick = data[SW_PENDING_CLICK_KEY] as {
+            providerId?: unknown;
+            notifToken?: unknown;
+          };
+          if (
+            typeof rawClick.providerId === 'string' &&
+            Object.hasOwn(PROVIDERS, rawClick.providerId)
+          ) {
+            pendingClickTarget =
+              typeof rawClick.notifToken === 'string' && rawClick.notifToken
+                ? {
+                    providerId: rawClick.providerId as ProviderId,
+                    notifToken: rawClick.notifToken
+                  }
+                : { providerId: rawClick.providerId as ProviderId };
           }
         }
       } catch {
@@ -102,6 +140,49 @@ async function persistReauthWindows(): Promise<void> {
     serialized[String(winId)] = providerId;
   }
   await persistSession({ [SW_REAUTH_KEY]: serialized });
+}
+
+async function setWindowFocusedState(windowFocused: boolean): Promise<void> {
+  focusUpdatedInMemory = true;
+  currentWindowFocused = windowFocused;
+  const nextFocus = {
+    windowFocused: currentWindowFocused,
+    focusedProvider: currentFocusedProvider
+  };
+  router.setFocusState(nextFocus);
+  await persistSession({ [SW_FOCUS_KEY]: { ...nextFocus, tabId: workspaceTabId } });
+}
+
+async function refreshLiveFocusState(): Promise<void> {
+  if (typeof chrome.tabs?.query !== 'function' || typeof chrome.windows?.get !== 'function') {
+    return;
+  }
+  try {
+    const wsTabs = await chrome.tabs.query({ url: `${getWorkspaceUrl()}*` });
+    let isWorkspaceActivelyViewed = false;
+    for (const tab of wsTabs) {
+      if (tab.active && typeof tab.windowId === 'number' && tab.windowId >= 0) {
+        const win = await chrome.windows.get(tab.windowId);
+        if (win?.focused) {
+          isWorkspaceActivelyViewed = true;
+          if (typeof tab.id === 'number') {
+            workspaceTabId = tab.id;
+          }
+          break;
+        }
+      }
+    }
+    if (isWorkspaceActivelyViewed !== currentWindowFocused) {
+      await setWindowFocusedState(isWorkspaceActivelyViewed);
+    } else {
+      router.setFocusState({
+        windowFocused: isWorkspaceActivelyViewed,
+        focusedProvider: currentFocusedProvider
+      });
+    }
+  } catch {
+    // Fall back cleanly to reported focus state if tab/window query fails
+  }
 }
 
 async function applyLiteMediaRuleset(enabled: boolean): Promise<void> {
@@ -165,11 +246,32 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     if (workspaceTabId !== null && tabId === workspaceTabId) {
       workspaceTabId = null;
       focusUpdatedInMemory = true;
+      currentWindowFocused = false;
+      currentFocusedProvider = null;
       const clearedFocus = { windowFocused: false, focusedProvider: null };
       router.setFocusState(clearedFocus);
       await persistSession({ [SW_FOCUS_KEY]: { ...clearedFocus, tabId: null } });
     }
     await broadcastDupTabs();
+  })();
+});
+
+chrome.tabs?.onActivated?.addListener(() => {
+  void (async () => {
+    await ensureHydrated();
+    await refreshLiveFocusState();
+  })();
+});
+
+chrome.windows?.onFocusChanged?.addListener((windowId) => {
+  void (async () => {
+    await ensureHydrated();
+    const noneId = chrome.windows?.WINDOW_ID_NONE ?? -1;
+    if (windowId === noneId) {
+      await setWindowFocusedState(false);
+      return;
+    }
+    await refreshLiveFocusState();
   })();
 });
 
@@ -180,7 +282,11 @@ chrome.windows.onRemoved.addListener((windowId) => {
     if (!providerId) return;
     reauthWindows.delete(windowId);
     await persistReauthWindows();
-    await syncProviderCookies(chrome.cookies, [providerId]);
+    try {
+      await syncProviderCookies(chrome.cookies, [providerId]);
+    } catch {
+      // Isolate cookie sync errors so provider reload always runs
+    }
     await broadcastToWorkspace({ type: 'RELOAD_PROVIDER', providerId });
   })();
 });
@@ -190,6 +296,16 @@ chrome.notifications.onClicked.addListener((notifId) => {
   const target = router.parseNotificationClick(notifId);
   void (async () => {
     try {
+      await ensureHydrated();
+      if (target) {
+        const nextPending: PendingClickTarget =
+          target.notifToken !== undefined
+            ? { providerId: target.providerId, notifToken: target.notifToken }
+            : { providerId: target.providerId };
+        pendingClickUpdatedInMemory = true;
+        pendingClickTarget = nextPending;
+        await persistSession({ [SW_PENDING_CLICK_KEY]: nextPending });
+      }
       const tabId = await openOrFocusWorkspace(chrome.tabs, chrome.windows, getWorkspaceUrl());
       if (!target) return;
       await broadcastToWorkspace({ type: 'FOCUS_PROVIDER', providerId: target.providerId });
@@ -205,7 +321,20 @@ chrome.notifications.onClicked.addListener((notifId) => {
                 type: 'TRIGGER_NOTIFY_CLICK',
                 providerId: target.providerId
               };
-        chrome.tabs.sendMessage(tabId, clickMsg, () => void chrome.runtime.lastError);
+        chrome.tabs.sendMessage(tabId, clickMsg, (res) => {
+          void chrome.runtime.lastError;
+          if (
+            res &&
+            typeof res === 'object' &&
+            (res as { handled?: unknown }).handled === true &&
+            pendingClickTarget?.providerId === target.providerId &&
+            pendingClickTarget?.notifToken === target.notifToken
+          ) {
+            pendingClickUpdatedInMemory = true;
+            pendingClickTarget = null;
+            void persistSession({ [SW_PENDING_CLICK_KEY]: null });
+          }
+        });
       }
     } catch {
       // Ignore transient tab focus errors
@@ -222,6 +351,7 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
       void (async () => {
         try {
           await ensureHydrated();
+          await refreshLiveFocusState();
           const notifId = await router.handleIncoming(rawMsg.payload);
           sendResponse({ notifId });
         } catch {
@@ -235,14 +365,40 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
       sendResponse({ ok: true });
       return false;
     }
+    case 'FOCUS_PROVIDER': {
+      if (!Object.hasOwn(PROVIDERS, rawMsg.providerId)) {
+        sendResponse({ ok: false });
+        return false;
+      }
+      void broadcastToWorkspace({ type: 'FOCUS_PROVIDER', providerId: rawMsg.providerId });
+      sendResponse({ ok: true });
+      return false;
+    }
+    case 'CONSUME_PENDING_CLICK': {
+      void (async () => {
+        try {
+          await ensureHydrated();
+          const target = pendingClickTarget;
+          pendingClickUpdatedInMemory = true;
+          pendingClickTarget = null;
+          await persistSession({ [SW_PENDING_CLICK_KEY]: null });
+          sendResponse({ target });
+        } catch {
+          sendResponse({ target: null });
+        }
+      })();
+      return true;
+    }
     case 'WORKSPACE_FOCUS_STATE': {
       focusUpdatedInMemory = true;
       if (typeof sender.tab?.id === 'number') {
         workspaceTabId = sender.tab.id;
       }
+      currentWindowFocused = rawMsg.windowFocused;
+      currentFocusedProvider = rawMsg.focusedProvider;
       const nextFocus = {
-        windowFocused: rawMsg.windowFocused,
-        focusedProvider: rawMsg.focusedProvider
+        windowFocused: currentWindowFocused,
+        focusedProvider: currentFocusedProvider
       };
       router.setFocusState(nextFocus);
       void persistSession({ [SW_FOCUS_KEY]: { ...nextFocus, tabId: workspaceTabId } });

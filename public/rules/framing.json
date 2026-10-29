@@ -13,6 +13,14 @@
       ]
     },
     "condition": {
+      "initiatorDomains": [
+        "ndcplbpbnmkeikikgmpgkaaiefmecmjh",
+        "zalo.me",
+        "messenger.com",
+        "facebook.com",
+        "telegram.org",
+        "discord.com"
+      ],
       "requestDomains": [
         "zalo.me",
         "messenger.com",

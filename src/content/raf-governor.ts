@@ -1,5 +1,11 @@
 import type { MainToIsolatedEvent } from '../shared/types';
 
+interface PendingRafEntry {
+  callback: FrameRequestCallback;
+  timerId?: number;
+  nativeId?: number;
+}
+
 export function installRafGovernor(
   targetWin: Window & typeof globalThis,
   idleIntervalMs = 500
@@ -8,7 +14,7 @@ export function installRafGovernor(
   const origCaf = targetWin.cancelAnimationFrame.bind(targetWin);
   let throttled = false;
   let syntheticIdSeq = 900_000_000;
-  const timerByHandle = new Map<number, number>();
+  const pendingByHandle = new Map<number, PendingRafEntry>();
 
   targetWin.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
     if (!throttled) {
@@ -17,19 +23,24 @@ export function installRafGovernor(
     syntheticIdSeq += 1;
     const handle = syntheticIdSeq;
     const timerId = targetWin.setTimeout(() => {
-      timerByHandle.delete(handle);
+      pendingByHandle.delete(handle);
       const now = targetWin.performance ? targetWin.performance.now() : Date.now();
       callback(now);
     }, idleIntervalMs);
-    timerByHandle.set(handle, timerId);
+    pendingByHandle.set(handle, { callback, timerId });
     return handle;
   }) as typeof targetWin.requestAnimationFrame;
 
   targetWin.cancelAnimationFrame = ((handle: number): void => {
-    const timerId = timerByHandle.get(handle);
-    if (timerId !== undefined) {
-      targetWin.clearTimeout(timerId);
-      timerByHandle.delete(handle);
+    const entry = pendingByHandle.get(handle);
+    if (entry) {
+      pendingByHandle.delete(handle);
+      if (entry.timerId !== undefined) {
+        targetWin.clearTimeout(entry.timerId);
+      }
+      if (entry.nativeId !== undefined) {
+        origCaf(entry.nativeId);
+      }
       return;
     }
     origCaf(handle);
@@ -38,6 +49,18 @@ export function installRafGovernor(
   return {
     setThrottled(next: boolean): void {
       throttled = next;
+      if (!next) {
+        for (const [handle, entry] of pendingByHandle.entries()) {
+          if (entry.timerId !== undefined) {
+            targetWin.clearTimeout(entry.timerId);
+            entry.timerId = undefined;
+            entry.nativeId = origRaf((ts) => {
+              pendingByHandle.delete(handle);
+              entry.callback(ts);
+            });
+          }
+        }
+      }
     },
     isThrottled(): boolean {
       return throttled;

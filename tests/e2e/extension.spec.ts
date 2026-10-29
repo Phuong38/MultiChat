@@ -10,7 +10,19 @@ let baseUrl = '';
 test.beforeAll(async () => {
   server = createServer((req, res) => {
     const provider = (req.url ?? '/zalo').split('?')[0]?.replace(/^\//, '') || 'zalo';
-    // Deliberately return strict framing blockers to verify DNR framing.json strips them!
+    if (provider === 'attacker') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>ATTACKER</title></head>
+          <body>
+            <h1 id="attacker-heading">attacker</h1>
+            <iframe id="victim" src="/zalo"></iframe>
+          </body>
+        </html>`);
+      return;
+    }
+    // Deliberately return strict framing blockers to verify DNR framing.json strips them only for extension initiatorDomains!
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'X-Frame-Options': 'DENY',
@@ -77,6 +89,7 @@ test('MV3 extension strips X-Frame-Options/CSP, swaps Bento in 0ms without reloa
       sw = await context.waitForEvent('serviceworker');
     }
     const extId = new URL(sw.url()).host;
+    expect(extId).toBe('ndcplbpbnmkeikikgmpgkaaiefmecmjh');
 
     const page = await context.newPage();
     const pageErrors: string[] = [];
@@ -94,6 +107,17 @@ test('MV3 extension strips X-Frame-Options/CSP, swaps Bento in 0ms without reloa
       await expect(frameLoc.locator('#provider-heading')).toHaveText(id);
       await expect(frameLoc.locator('#dia-sub-diet')).toHaveCount(id === 'zalo' ? 0 : 1);
     }
+
+    // 1a. Verify clickjacking protection: non-extension page /attacker on 127.0.0.1 CANNOT frame /zalo
+    const attackerPage = await context.newPage();
+    const victimRespPromise = attackerPage.waitForResponse((r) => r.url().endsWith('/zalo'));
+    await attackerPage.goto(`${baseUrl}/attacker`, { waitUntil: 'load' });
+    const victimResp = await victimRespPromise;
+    expect(victimResp.status()).toBe(200);
+    await expect(attackerPage.locator('#attacker-heading')).toHaveText('attacker');
+    await expect(attackerPage.frameLocator('#victim').locator('#provider-heading')).toHaveCount(0);
+    await attackerPage.close();
+    await page.bringToFront();
 
     // 1b. Verify pixel-clean Bento geometry at 1440x900 without overflow or overlap
     const docMetrics = await page.evaluate(() => ({
@@ -169,6 +193,22 @@ test('MV3 extension strips X-Frame-Options/CSP, swaps Bento in 0ms without reloa
     expect(swappedMsgrBox.y).toBe(32);
     expect(swappedMsgrBox.height).toBe(868);
 
+    // 2b. Click/focus inside cross-origin Messenger iframe, then press Alt+3 and verify Telegram swaps to Main without reload
+    const tgNonceBefore = await getNonce('telegram');
+    await page.frameLocator('section[data-provider="messenger"] iframe').locator('#provider-heading').click();
+    await page.keyboard.press('Alt+3');
+    await expect(page.locator('section[data-provider="telegram"]')).toHaveAttribute(
+      'data-slot',
+      'main'
+    );
+    await expect(page.locator('section[data-provider="messenger"]')).toHaveAttribute(
+      'data-slot',
+      'sub-2'
+    );
+    expect(await getNonce('telegram')).toBe(tgNonceBefore);
+    expect(await getNonce('messenger')).toBe(msgrNonceBefore);
+    expect(await getNonce('zalo')).toBe(zaloNonceBefore);
+
     // 3. Verify unread title parsing updates Pane Header & Workspace title + MAIN Notification proxy
     const discordFrame = page.frames().find((f) => f.url().endsWith('/discord'))!;
     const perm = await discordFrame.evaluate(() => Notification.permission);
@@ -187,8 +227,11 @@ test('MV3 extension strips X-Frame-Options/CSP, swaps Bento in 0ms without reloa
 
     // 4. Deterministically wait for cross-frame DIA_SLOT_MODE sync before measuring rAF ticks
     await expect(
-      page.frameLocator('section[data-provider="messenger"] iframe').locator('#dia-sub-diet')
+      page.frameLocator('section[data-provider="telegram"] iframe').locator('#dia-sub-diet')
     ).toHaveCount(0);
+    await expect(
+      page.frameLocator('section[data-provider="messenger"] iframe').locator('#dia-sub-diet')
+    ).toHaveCount(1);
     await expect(
       page.frameLocator('section[data-provider="zalo"] iframe').locator('#dia-sub-diet')
     ).toHaveCount(1);
@@ -196,10 +239,10 @@ test('MV3 extension strips X-Frame-Options/CSP, swaps Bento in 0ms without reloa
       page.frameLocator('section[data-provider="discord"] iframe').locator('#dia-sub-diet')
     ).toHaveCount(1);
 
-    // Verify rAF Governor: Main pane (Messenger) ticks fast (>10 ticks/650ms), Sub pane (Discord) ticks <=3
-    const messengerFrame = page.frames().find((f) => f.url().endsWith('/messenger'))!;
+    // Verify rAF Governor: Main pane (Telegram) ticks fast (>10 ticks/650ms), Sub pane (Discord) ticks <=3
+    const telegramFrame = page.frames().find((f) => f.url().endsWith('/telegram'))!;
     const [mainTicks, subTicks] = await Promise.all([
-      messengerFrame.evaluate(() =>
+      telegramFrame.evaluate(() =>
         (
           window as unknown as { __measureRafTicks: (ms: number) => Promise<number> }
         ).__measureRafTicks(650)

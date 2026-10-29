@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Dia Bento Chat Hub",
   "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyB5vZSXjsCNYaIMleOS8avFIpGoAAIjjgtQo2cAwG+QBfvh6jHL76hR8LcdsrrV3QmVDXo271jWI8SEpIYdCKE4NUyIERctYO+4kNrbxzxialAEkRLC5MRKQZ4CXOs1HhHj9AZIgx0aYlbc9mHEbXdLj/GKEG7RUewxfL+9eQY/QJvFDV4Gc4bwOdBU/T2YAgioHXQIb6ZiZfXKLWwM+Y6ypWp9/UeHVY+faeWQMJM5WqGcOg99Y9u0oDj2xnCgD7xZJrAGf5JVsvEizHjVA5+ChLcNUYglq443z9jl55Hed2PorHtLrZHT17NGeg9DNXVWJiZBGvFPomcY9MpRtwwIDAQAB",
   "description": "All-in-one Bento workspace for Zalo, Messenger, Telegram, and Discord with native macOS notifications and RAM diet.",
   "permissions": [
     "declarativeNetRequest",

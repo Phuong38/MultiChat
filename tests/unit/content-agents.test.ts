@@ -108,11 +108,21 @@ describe('MAIN world hooks (Notification & rAF Governor)', () => {
     expect(cancelledTick).not.toHaveBeenCalled();
     expect(cancelledNativeHandles).toHaveLength(0);
 
+    // Pending throttled callback flushes immediately via native rAF (<16ms) when unthrottled
+    const flushedTick = vi.fn();
+    window.requestAnimationFrame(flushedTick);
+    vi.advanceTimersByTime(50);
+    expect(flushedTick).not.toHaveBeenCalled();
+
     gov.setThrottled(false);
     expect(gov.isThrottled()).toBe(false);
+    expect(nativeCalls).toBe(1);
+    vi.advanceTimersByTime(16);
+    expect(flushedTick).toHaveBeenCalledTimes(1);
+
     window.requestAnimationFrame(tick);
     vi.advanceTimersByTime(20);
-    expect(nativeCalls).toBe(1);
+    expect(nativeCalls).toBe(2);
     expect(tick).toHaveBeenCalledTimes(2);
 
     const nativeCancelTick = vi.fn();
@@ -155,9 +165,9 @@ describe('ISOLATED world UnreadFallbackTracker & SubPaneDiet', () => {
     const onFallback = vi.fn();
     const tracker = new UnreadFallbackTracker(1500, onFallback);
 
-    // RAW_NOTIFY arrives 100ms before SPA updates unread badge in DOM
+    // RAW_NOTIFY arrives 2500ms before 3000ms DOM unread poll catches badge update -> suppressed!
     tracker.onRawNotify();
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(2500);
     tracker.onUnreadCount(1);
     vi.advanceTimersByTime(1500);
     expect(onFallback).not.toHaveBeenCalled();
@@ -459,8 +469,21 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
     });
     expect(chatMsg.payload.notifToken).toMatch(/^nt-/);
 
+    // Empty-origin MessageEvent is strictly rejected when expectedExtensionOrigin is known
     window.dispatchEvent(
       new MessageEvent('message', {
+        origin: '',
+        data: {
+          type: 'DIA_CLICK_NOTIFY',
+          notifToken: chatMsg.payload.notifToken
+        }
+      })
+    );
+    expect(clickSpy).not.toHaveBeenCalled();
+
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: 'chrome-extension://dia-ext-id',
         data: {
           type: 'DIA_CLICK_NOTIFY',
           notifToken: chatMsg.payload.notifToken
@@ -468,6 +491,44 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
       })
     );
     expect(clickSpy).toHaveBeenCalledTimes(1);
+
+    // Flush the 250ms post-RAW_NOTIFY unread check, then verify DOM badge rise 2500ms after RAW_NOTIFY does NOT double-notify
+    vi.advanceTimersByTime(250);
+    sentMessages.length = 0;
+    new window.Notification('Minh', { body: 'DOM badge delayed', tag: 'tg-43' });
+    expect(sentMessages.filter((m) => m.type === 'CHAT_NOTIFY')).toHaveLength(1);
+    vi.advanceTimersByTime(2500);
+    document.body.innerHTML = '<span class="badge-unread">1</span>';
+    vi.advanceTimersByTime(3000); // next 3000ms poll observes DOM badge rise without duplicate fallback
+    expect(sentMessages).toContainEqual({
+      type: 'UNREAD_UPDATE',
+      providerId: 'telegram',
+      count: 1
+    });
+    vi.advanceTimersByTime(2000);
+    expect(sentMessages.filter((m) => m.type === 'CHAT_NOTIFY')).toHaveLength(1);
+    document.body.innerHTML = '';
+    vi.advanceTimersByTime(3000);
+
+    // Capture-phase Alt+3 / macOS Option+3 inside iframe forwards FOCUS_PROVIDER to background and blocks page handlers
+    sentMessages.length = 0;
+    const bubbleKeySpy = vi.fn();
+    window.addEventListener('keydown', bubbleKeySpy);
+    const shortcutEv = new KeyboardEvent('keydown', {
+      altKey: true,
+      code: 'Digit3',
+      key: '£',
+      bubbles: true,
+      cancelable: true
+    });
+    window.dispatchEvent(shortcutEv);
+    window.removeEventListener('keydown', bubbleKeySpy);
+    expect(shortcutEv.defaultPrevented).toBe(true);
+    expect(bubbleKeySpy).not.toHaveBeenCalled();
+    expect(sentMessages).toContainEqual({
+      type: 'FOCUS_PROVIDER',
+      providerId: 'telegram'
+    });
 
     // Title mutation fires MutationObserver immediately without waiting for 3000ms poll
     sentMessages.length = 0;

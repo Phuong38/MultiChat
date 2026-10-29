@@ -38,6 +38,11 @@ export interface ExternalProviderTab {
   url: string;
 }
 
+export interface PendingClickTarget {
+  providerId: ProviderId;
+  notifToken?: string;
+}
+
 export type RuntimeMessage =
   | { type: 'CHAT_NOTIFY'; payload: NotifyPayload }
   | { type: 'UNREAD_UPDATE'; providerId: ProviderId; count: number }
@@ -51,6 +56,7 @@ export type RuntimeMessage =
   | { type: 'TEST_NOTIFY' }
   | { type: 'GET_DUP_TABS' }
   | { type: 'CLOSE_DUP_TABS' }
+  | { type: 'CONSUME_PENDING_CLICK' }
   | { type: 'FOCUS_PROVIDER'; providerId: ProviderId }
   | { type: 'RELOAD_PROVIDER'; providerId: ProviderId }
   | { type: 'TRIGGER_NOTIFY_CLICK'; providerId: ProviderId; notifToken?: string }

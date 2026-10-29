@@ -1,5 +1,6 @@
 import type {
   ExternalProviderTab,
+  PendingClickTarget,
   ProviderId,
   RuntimeMessage,
   SlotId,
@@ -114,7 +115,7 @@ function applyLayout(): void {
 
   sendRuntime({
     type: 'WORKSPACE_FOCUS_STATE',
-    windowFocused: document.hasFocus(),
+    windowFocused: document.visibilityState === 'visible' && document.hasFocus(),
     focusedProvider: prefs.slotOrder[0]
   });
 }
@@ -137,29 +138,39 @@ function updateUnreadUi(): void {
   document.title = formatWorkspaceTitle(unreads);
 }
 
-function focusProvider(providerId: ProviderId): void {
-  if (prefs.paused[providerId]) {
-    togglePause(providerId, false);
-  }
-  prefs.slotOrder = swapProviderToMain(prefs.slotOrder, providerId);
-  applyLayout();
-  savePrefs();
-}
-
-function togglePause(providerId: ProviderId, nextPaused?: boolean): void {
+function setPausedDom(providerId: ProviderId, paused: boolean): void {
   const pane = panes.get(providerId);
   if (!pane) return;
-  const paused = nextPaused ?? !prefs.paused[providerId];
   prefs.paused[providerId] = paused;
   if (paused) {
     pane.iframe.src = 'about:blank';
     pane.pausedOverlay.classList.remove('hidden');
     pane.pauseBtn.textContent = 'Resume';
+    unreads[providerId] = 0;
+    updateUnreadUi();
   } else {
     pane.pausedOverlay.classList.add('hidden');
     pane.pauseBtn.textContent = 'Pause';
     pane.iframe.src = resolveEmbedUrl(providerId, testOrigin);
   }
+}
+
+function focusProvider(providerId: ProviderId): void {
+  if (prefs.paused[providerId]) {
+    setPausedDom(providerId, false);
+  }
+  prefs.slotOrder = swapProviderToMain(prefs.slotOrder, providerId);
+  applyLayout();
+  savePrefs();
+  if (!prefs.paused[providerId]) {
+    panes.get(providerId)?.iframe.focus();
+  }
+}
+
+function togglePause(providerId: ProviderId, nextPaused?: boolean): void {
+  if (!panes.has(providerId)) return;
+  const paused = nextPaused ?? !prefs.paused[providerId];
+  setPausedDom(providerId, paused);
   applyLayout();
   savePrefs();
 }
@@ -279,10 +290,26 @@ function updateDupTabsBanner(tabs: ExternalProviderTab[]): void {
   btn.classList.remove('hidden');
 }
 
-function onRuntimeMessage(msg: RuntimeMessage): void {
+function applyNotificationClickTarget(target: PendingClickTarget): void {
+  if (!Object.hasOwn(PROVIDERS, target.providerId)) return;
+  focusProvider(target.providerId);
+  if (typeof target.notifToken === 'string' && target.notifToken) {
+    panes.get(target.providerId)?.iframe.contentWindow?.postMessage(
+      { type: 'DIA_CLICK_NOTIFY', notifToken: target.notifToken },
+      '*'
+    );
+  }
+}
+
+function onRuntimeMessage(
+  msg: RuntimeMessage,
+  _sender?: chrome.runtime.MessageSender,
+  sendResponse?: (res?: unknown) => void
+): void {
   if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
   if (msg.type === 'UNREAD_UPDATE') {
     if (!Object.hasOwn(PROVIDERS, msg.providerId)) return;
+    if (prefs.paused[msg.providerId]) return;
     const nextCount =
       typeof msg.count === 'number' && Number.isFinite(msg.count) && msg.count > 0
         ? Math.floor(msg.count)
@@ -299,13 +326,8 @@ function onRuntimeMessage(msg: RuntimeMessage): void {
     }
   } else if (msg.type === 'TRIGGER_NOTIFY_CLICK') {
     if (!Object.hasOwn(PROVIDERS, msg.providerId)) return;
-    focusProvider(msg.providerId);
-    if (typeof msg.notifToken === 'string' && msg.notifToken) {
-      panes.get(msg.providerId)?.iframe.contentWindow?.postMessage(
-        { type: 'DIA_CLICK_NOTIFY', notifToken: msg.notifToken },
-        '*'
-      );
-    }
+    applyNotificationClickTarget(msg);
+    sendResponse?.({ handled: true });
   } else if (msg.type === 'DUP_TABS_CHANGED') {
     if (Array.isArray(msg.tabs)) {
       updateDupTabsBanner(msg.tabs);
@@ -358,6 +380,7 @@ function bindEvents(): void {
 
   window.addEventListener('focus', () => applyLayout(), { signal });
   window.addEventListener('blur', () => applyLayout(), { signal });
+  document.addEventListener('visibilitychange', () => applyLayout(), { signal });
 
   const resizer = document.getElementById('grid-resizer');
   resizer?.addEventListener('mousedown', (startEv) => {
@@ -387,7 +410,10 @@ function bindEvents(): void {
   if (globalThis.chrome?.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener(onRuntimeMessage);
   }
+}
 
+void (async () => {
+  if (!document.getElementById('bento-grid')) return;
   window.addEventListener(
     'pagehide',
     (ev: Event) => {
@@ -397,12 +423,8 @@ function bindEvents(): void {
         globalThis.chrome?.runtime?.onMessage?.removeListener?.(onRuntimeMessage);
       }
     },
-    { signal }
+    { signal: lifecycle.signal }
   );
-}
-
-void (async () => {
-  if (!document.getElementById('bento-grid')) return;
   await loadPrefs();
   if (lifecycle.signal.aborted) return;
   mountPanes();
@@ -410,6 +432,13 @@ void (async () => {
   applyLayout();
   savePrefs();
   updateUnreadUi();
+  sendRuntime({ type: 'CONSUME_PENDING_CLICK' }, (res) => {
+    if (lifecycle.signal.aborted) return;
+    const data = res as { target?: PendingClickTarget | null } | undefined;
+    if (data?.target && typeof data.target === 'object') {
+      applyNotificationClickTarget(data.target);
+    }
+  });
   sendRuntime({ type: 'GET_DUP_TABS' }, (res) => {
     if (lifecycle.signal.aborted) return;
     const data = res as { tabs?: ExternalProviderTab[] } | undefined;

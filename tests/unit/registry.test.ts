@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   PROVIDER_ORDER,
   PROVIDERS,
@@ -9,6 +9,10 @@ import {
 } from '../../src/providers/registry';
 
 describe('ProviderRegistry', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
   it('enforces Telegram WebK (/k/) and defines all 4 MVP providers', () => {
     expect(PROVIDER_ORDER).toEqual(['zalo', 'messenger', 'telegram', 'discord']);
     expect(PROVIDERS.telegram.embedUrl).toBe('https://web.telegram.org/k/');
@@ -22,18 +26,23 @@ describe('ProviderRegistry', () => {
     expect(PROVIDERS.discord.shortcutIndex).toBe(4);
   });
 
-  it('parses unread counts from document titles accurately', () => {
+  it('parses unread counts from document titles accurately while rejecting non-badge parentheticals', () => {
     expect(parseUnreadFromTitle('zalo', '(5) Zalo')).toBe(5);
     expect(parseUnreadFromTitle('messenger', '(12) Messenger')).toBe(12);
     expect(parseUnreadFromTitle('discord', '• (3) Discord | #general')).toBe(3);
+    expect(parseUnreadFromTitle('messenger', '* (8) Messenger')).toBe(8);
     expect(parseUnreadFromTitle('telegram', 'Telegram (2)')).toBe(2);
     expect(parseUnreadFromTitle('zalo', '(99+) Zalo')).toBe(99);
+    expect(parseUnreadFromTitle('zalo', 'Sprint Plan (2026)')).toBe(0);
+    expect(parseUnreadFromTitle('telegram', 'Sprint Plan (2026)')).toBe(0);
+    expect(parseUnreadFromTitle('discord', 'Call (10:30)')).toBe(0);
+    expect(parseUnreadFromTitle('messenger', 'Call (10:30)')).toBe(0);
     expect(parseUnreadFromTitle('zalo', '(0) Zalo')).toBe(0);
     expect(parseUnreadFromTitle('zalo', 'Zalo')).toBe(0);
     expect(parseUnreadFromTitle('telegram', '')).toBe(0);
   });
 
-  it('extracts unread sum from provider badge DOM elements and deduplicates overlapping selectors', () => {
+  it('extracts unread sum from provider badge DOM elements without concatenating row timestamps or double-counting nested badges', () => {
     document.body.innerHTML = `
       <div class="badge-unread">4</div>
       <div class="badge-unread">2</div>
@@ -41,6 +50,34 @@ describe('ProviderRegistry', () => {
       <div class="unread">•</div>
     `;
     expect(extractUnreadFromDom('telegram', document)).toBe(11);
+
+    document.body.innerHTML = `
+      <div aria-label="2 unread messages"><span>Hop luc 10:30</span><span>2m</span></div>
+    `;
+    expect(extractUnreadFromDom('messenger', document)).toBe(2);
+    expect(extractUnreadFromDom('discord', document)).toBe(2);
+
+    // Nested badge + outer aria-label container must not double-count
+    document.body.innerHTML = `
+      <div aria-label="2 unread messages">
+        <span data-testid="mwthreadlist-item-unread-badge">2</span>
+        <span>Hop luc 10:30</span>
+        <span>2m</span>
+      </div>
+      <div aria-label="Unread conversation">
+        <span>Hop luc 11:45</span>
+        <span>5m</span>
+      </div>
+    `;
+    expect(extractUnreadFromDom('messenger', document)).toBe(2);
+
+    document.body.innerHTML = `
+      <div aria-label="3 unread mentions">
+        <span class="numberBadge-2s8kKX">3</span>
+        <span>Sprint 10:30</span>
+      </div>
+    `;
+    expect(extractUnreadFromDom('discord', document)).toBe(3);
   });
 
   it('matches external and local E2E URLs back to provider IDs', () => {

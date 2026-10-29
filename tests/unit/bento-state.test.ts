@@ -512,6 +512,19 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     expect(totalBadge.classList.contains('hidden')).toBe(false);
     expect(document.title).toBe('(5) Dia Bento Chat Hub');
 
+    // Pausing Telegram resets its unread count to 0 immediately
+    tgPauseBtn.click();
+    expect(totalBadge.textContent).toBe('2');
+    expect(document.title).toBe('(2) Dia Bento Chat Hub');
+
+    // Focusing paused Telegram wakes + swaps in a single savePrefs/applyLayout pass and focuses iframe
+    sentRuntime.length = 0;
+    const focusSpy = vi.spyOn(telegramIframe, 'focus');
+    runtimeListeners[0]?.({ type: 'FOCUS_PROVIDER', providerId: 'telegram' });
+    expect(telegramIframe.src).toBe('http://127.0.0.1:4321/telegram');
+    expect(sentRuntime.filter((m) => m.type === 'SYNC_PREFS')).toHaveLength(1);
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+
     // Topbar toggles sync prefs to background service worker
     sentRuntime.length = 0;
     document.getElementById('btn-lite-media')!.click();
@@ -649,5 +662,92 @@ describe('Workspace UI DOM integration (zero-reload Bento swap, pause, controls,
     expect(document.body.classList.contains('resizing')).toBe(true);
     window.dispatchEvent(new Event('blur'));
     expect(document.body.classList.contains('resizing')).toBe(false);
+  });
+
+  it('consumes pending cold-boot notification click target, reports visibilitychange focus state, and aborts cleanly on early pagehide', async () => {
+    loadWorkspaceMarkup();
+    const sentRuntime: RuntimeMessage[] = [];
+
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => {})
+        }
+      },
+      runtime: {
+        sendMessage: vi.fn((msg: RuntimeMessage, cb?: (res: unknown) => void) => {
+          sentRuntime.push(msg);
+          if (msg.type === 'CONSUME_PENDING_CLICK') {
+            cb?.({ target: { providerId: 'discord' } });
+          } else {
+            cb?.({});
+          }
+        }),
+        onMessage: {
+          addListener: vi.fn(),
+          removeListener: vi.fn()
+        },
+        lastError: undefined
+      }
+    });
+
+    await import('../../src/workspace/workspace');
+    await flushMicrotasks();
+
+    const grid = document.getElementById('bento-grid')!;
+    const discordPane = grid.querySelector<HTMLElement>('section.pane[data-provider="discord"]')!;
+    expect(discordPane.dataset.slot).toBe('main');
+
+    // Tab switch (visibilityState -> hidden) immediately reports windowFocused: false
+    const origVis = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'hidden',
+      configurable: true
+    });
+    sentRuntime.length = 0;
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(sentRuntime).toContainEqual({
+      type: 'WORKSPACE_FOCUS_STATE',
+      windowFocused: false,
+      focusedProvider: 'discord'
+    });
+    if (origVis) {
+      Object.defineProperty(document, 'visibilityState', origVis);
+    } else {
+      Reflect.deleteProperty(document, 'visibilityState');
+    }
+
+    // Verify pagehide before loadPrefs resolves aborts boot cleanly without mounting panes
+    window.dispatchEvent(new Event('pagehide'));
+    vi.resetModules();
+    loadWorkspaceMarkup();
+
+    let resolveStorage!: (val: Record<string, unknown>) => void;
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(
+            () =>
+              new Promise<Record<string, unknown>>((r) => {
+                resolveStorage = r;
+              })
+          ),
+          set: vi.fn(async () => {})
+        }
+      },
+      runtime: {
+        sendMessage: vi.fn(),
+        onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+        lastError: undefined
+      }
+    });
+
+    await import('../../src/workspace/workspace');
+    window.dispatchEvent(new Event('pagehide'));
+    resolveStorage({});
+    await flushMicrotasks();
+    expect(document.querySelectorAll('section.pane')).toHaveLength(0);
   });
 });

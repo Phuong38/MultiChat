@@ -25,7 +25,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     loginUrl: 'https://chat.zalo.me/',
     hostPatterns: ['chat.zalo.me', 'id.zalo.me'],
     cookieDomains: ['.zalo.me', 'chat.zalo.me'],
-    titleUnreadRegex: /\((\d+)\+?/,
+    titleUnreadRegex: /^\s*[•*]?\s*\((\d+)\+?\)(?=\s|$)|\bZalo\s*\((\d+)\+?\)\s*$/i,
     badgeSelectors: ['.conv-item-title__unread', '.unread-red-dot-num', '[data-id*="unread"]'],
     subPaneCss: `
       ${COMMON_SUB_DIET_CSS}
@@ -40,8 +40,8 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     loginUrl: 'https://www.messenger.com/login/',
     hostPatterns: ['www.messenger.com', 'messenger.com'],
     cookieDomains: ['.messenger.com', '.facebook.com'],
-    titleUnreadRegex: /\((\d+)\+?/,
-    badgeSelectors: ['[aria-label*="unread"]', '[data-testid="mwthreadlist-item-unread-badge"]'],
+    titleUnreadRegex: /^\s*[•*]?\s*\((\d+)\+?\)(?=\s|$)|\bMessenger\s*\((\d+)\+?\)\s*$/i,
+    badgeSelectors: ['[data-testid="mwthreadlist-item-unread-badge"]', '[aria-label*="unread"]'],
     subPaneCss: `
       ${COMMON_SUB_DIET_CSS}
       [role="complementary"] { display: none !important; }
@@ -55,7 +55,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     loginUrl: 'https://web.telegram.org/k/',
     hostPatterns: ['web.telegram.org'],
     cookieDomains: ['.telegram.org', 'web.telegram.org'],
-    titleUnreadRegex: /\((\d+)\+?/,
+    titleUnreadRegex: /^\s*[•*]?\s*\((\d+)\+?\)(?=\s|$)|\bTelegram(?:\s+Web)?\s*\((\d+)\+?\)\s*$/i,
     badgeSelectors: ['.badge-unread', '.unread'],
     subPaneCss: `
       ${COMMON_SUB_DIET_CSS}
@@ -70,7 +70,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     loginUrl: 'https://discord.com/login',
     hostPatterns: ['discord.com'],
     cookieDomains: ['.discord.com', 'discord.com'],
-    titleUnreadRegex: /\((\d+)\+?/,
+    titleUnreadRegex: /^\s*[•*]?\s*\((\d+)\+?\)(?=\s|$)|\bDiscord\s*\((\d+)\+?\)\s*$/i,
     badgeSelectors: ['[class*="numberBadge"]', '[aria-label*="unread"]'],
     subPaneCss: `
       ${COMMON_SUB_DIET_CSS}
@@ -81,15 +81,42 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
 
 export function parseUnreadFromTitle(providerId: ProviderId, title: string): number {
   const match = PROVIDERS[providerId].titleUnreadRegex.exec(title);
-  if (!match || !match[1]) return 0;
-  const parsed = Number.parseInt(match[1], 10);
+  const raw = match?.[1] ?? match?.[2];
+  if (!raw) return 0;
+  const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+const NUMERIC_PILL_RE = /^(\d+)\+?$/;
+const ARIA_COUNT_BEFORE_UNREAD_RE = /\b(\d+)\+?\s+unread\b/i;
+const ARIA_COUNT_AFTER_UNREAD_RE = /\bunread(?:\s+messages?)?[\s:(-]+(\d+)\+?(?!\s*:\d)/i;
+
+function parseUnreadFromElement(el: Element): number {
+  const text = (el.textContent ?? '').trim();
+  const pillMatch = NUMERIC_PILL_RE.exec(text);
+  if (pillMatch?.[1]) {
+    const parsed = Number.parseInt(pillMatch[1], 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  const aria = el.getAttribute('aria-label') ?? '';
+  if (aria) {
+    const ariaMatch =
+      ARIA_COUNT_BEFORE_UNREAD_RE.exec(aria) ?? ARIA_COUNT_AFTER_UNREAD_RE.exec(aria);
+    if (ariaMatch?.[1]) {
+      const parsed = Number.parseInt(ariaMatch[1], 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    }
+  }
+
+  return 0;
 }
 
 export function extractUnreadFromDom(providerId: ProviderId, root: ParentNode): number {
   const selectors = PROVIDERS[providerId].badgeSelectors;
   let total = 0;
   const seen = new Set<Element>();
+  const counted: Element[] = [];
   for (const selector of selectors) {
     let nodes: NodeListOf<Element>;
     try {
@@ -100,9 +127,12 @@ export function extractUnreadFromDom(providerId: ProviderId, root: ParentNode): 
     for (const el of nodes) {
       if (seen.has(el)) continue;
       seen.add(el);
-      const text = (el.textContent ?? '').trim();
-      const num = Number.parseInt(text.replace(/[^\d]/g, ''), 10);
-      if (Number.isFinite(num) && num > 0) {
+      if (counted.some((prev) => prev.contains(el) || el.contains(prev))) {
+        continue;
+      }
+      const num = parseUnreadFromElement(el);
+      if (num > 0) {
+        counted.push(el);
         total += num;
       }
     }
