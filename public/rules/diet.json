@@ -1,0 +1,39 @@
+[
+  {
+    "id": 101,
+    "priority": 10,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||discord.com/api/*/science",
+      "resourceTypes": ["xmlhttprequest", "ping", "other"]
+    }
+  },
+  {
+    "id": 102,
+    "priority": 10,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||sentry.io/",
+      "resourceTypes": ["xmlhttprequest", "script", "ping"]
+    }
+  },
+  {
+    "id": 103,
+    "priority": 10,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "/ajax/bz",
+      "requestDomains": ["messenger.com", "facebook.com"],
+      "resourceTypes": ["xmlhttprequest", "ping"]
+    }
+  },
+  {
+    "id": 104,
+    "priority": 10,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "||log.zalo.me/",
+      "resourceTypes": ["xmlhttprequest", "ping", "image"]
+    }
+  }
+]

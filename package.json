@@ -1,0 +1,22 @@
+{
+  "name": "dia-multichat-bento",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:test": "node scripts/build.mjs --test",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build:test && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@types/chrome": "^0.0.308",
+    "@types/node": "^22.13.0",
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

@@ -1,0 +1,11 @@
+[
+  {
+    "id": 201,
+    "priority": 20,
+    "action": { "type": "block" },
+    "condition": {
+      "requestDomains": ["media.tenor.com", "media.giphy.com"],
+      "resourceTypes": ["image", "media"]
+    }
+  }
+]

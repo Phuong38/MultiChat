@@ -1,0 +1,81 @@
+{
+  "manifest_version": 3,
+  "name": "Dia Bento Chat Hub",
+  "version": "0.1.0",
+  "description": "All-in-one Bento workspace for Zalo, Messenger, Telegram, and Discord with native macOS notifications and RAM diet.",
+  "permissions": [
+    "declarativeNetRequest",
+    "cookies",
+    "notifications",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.zalo.me/*",
+    "*://*.messenger.com/*",
+    "*://*.facebook.com/*",
+    "*://*.fbcdn.net/*",
+    "*://*.telegram.org/*",
+    "*://*.discord.com/*",
+    "*://*.tenor.com/*",
+    "*://*.giphy.com/*"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Open Dia Bento Chat Hub",
+    "default_icon": "icons/icon-48.png"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "framing",
+        "enabled": true,
+        "path": "rules/framing.json"
+      },
+      {
+        "id": "diet",
+        "enabled": true,
+        "path": "rules/diet.json"
+      },
+      {
+        "id": "lite_media",
+        "enabled": false,
+        "path": "rules/lite-media.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.zalo.me/*",
+        "*://*.messenger.com/*",
+        "*://*.telegram.org/*",
+        "*://*.discord.com/*"
+      ],
+      "js": ["notify-hook.main.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://*.zalo.me/*",
+        "*://*.messenger.com/*",
+        "*://*.telegram.org/*",
+        "*://*.discord.com/*"
+      ],
+      "js": ["frame-agent.isolated.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "ISOLATED"
+    }
+  ]
+}
