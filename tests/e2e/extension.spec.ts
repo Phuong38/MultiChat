@@ -22,8 +22,16 @@ test.beforeAll(async () => {
         </html>`);
       return;
     }
-    // Simulate Meta's real server-side Sec-Fetch-Dest: iframe anti-framing rejection on /messenger
-    if (provider === 'messenger' && req.headers['sec-fetch-dest'] === 'iframe') {
+    if (req.url?.startsWith('/messenger?redirectFb=1')) {
+      res.writeHead(302, { Location: '/facebook/messages/e2ee/t/30003' });
+      res.end();
+      return;
+    }
+    // Simulate Meta's real server-side Sec-Fetch-Dest: iframe anti-framing rejection on /messenger and /facebook/messages
+    if (
+      (provider === 'messenger' || provider.startsWith('facebook/')) &&
+      req.headers['sec-fetch-dest'] === 'iframe'
+    ) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(
         '<div class="uiInterstitial"><h2>Không thể xử lý yêu cầu của bạn</h2><a href="/">Trở về trang chủ</a></div>'
@@ -365,7 +373,9 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
       .frameLocator('section[data-provider="messenger"] iframe')
       .locator('#chat-input');
     await msgrInput.click();
-    await expect(msgrInput).toBeFocused();
+    await expect
+      .poll(async () => getFrame('messenger').evaluate(() => document.activeElement?.id))
+      .toBe('chat-input');
     await page.keyboard.press('Alt+3');
     await expect(page.locator('section[data-provider="telegram"]')).toHaveAttribute(
       'data-slot',
@@ -608,6 +618,295 @@ test('MV3 extension verifies Auto-Hide UI geometry, Maximize 100% scroll preserv
     expect(sandboxWarnings).toEqual([]);
     expect(pageErrors).toEqual([]);
     expect(consoleErrors).toEqual([]);
+  } finally {
+    try {
+      await context?.close();
+    } finally {
+      rmSync(userDataDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('MV3 extension displays real decrypted message content for Messenger E2EE empty-body notifications and Comet DOM unread threads', async () => {
+  const distPath = resolve(process.cwd(), 'dist');
+  const userDataDir = mkdtempSync(join(tmpdir(), 'dia-bento-msgr-e2e-'));
+  let context: BrowserContext | undefined;
+
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, {
+      channel: 'chromium',
+      headless: true,
+      viewport: { width: 1440, height: 900 },
+      args: [
+        `--disable-extensions-except=${distPath}`,
+        `--load-extension=${distPath}`
+      ]
+    });
+
+    let [sw] = context.serviceWorkers();
+    if (!sw) {
+      sw = await context.waitForEvent('serviceworker');
+    }
+    const extId = new URL(sw.url()).host;
+
+    await sw.evaluate(() => {
+      const captured: Array<{
+        id: string;
+        options: chrome.notifications.NotificationOptions<true>;
+      }> = [];
+      (globalThis as unknown as { __capturedNotifs: typeof captured }).__capturedNotifs = captured;
+      const origCreate = chrome.notifications.create.bind(chrome.notifications);
+      chrome.notifications.create = ((
+        idOrOpts: string | chrome.notifications.NotificationOptions<true>,
+        optsOrCb?:
+          | chrome.notifications.NotificationOptions<true>
+          | ((notificationId: string) => void),
+        maybeCb?: (notificationId: string) => void
+      ) => {
+        if (typeof idOrOpts === 'string' && optsOrCb && typeof optsOrCb === 'object') {
+          captured.push({ id: idOrOpts, options: optsOrCb });
+          return origCreate(idOrOpts, optsOrCb, maybeCb ?? (() => {}));
+        }
+        return origCreate(
+          idOrOpts as chrome.notifications.NotificationOptions<true>,
+          (optsOrCb as (notificationId: string) => void) ?? (() => {})
+        );
+      }) as typeof chrome.notifications.create;
+    });
+
+    const page = await context.newPage();
+    await page.goto(
+      `chrome-extension://${extId}/workspace.html?testOrigin=${encodeURIComponent(baseUrl)}`
+    );
+
+    // Ensure Zalo is actively focused in main slot while Messenger runs in sub-1
+    const zaloInput = page.frameLocator('section[data-provider="zalo"] iframe').locator('#chat-input');
+    await zaloInput.click();
+
+    const msgrFrame = page.frames().find((f) => f.url().endsWith('/messenger'))!;
+    expect(msgrFrame).toBeTruthy();
+
+    // Case 1: Messenger E2EE fires window.Notification with empty body first, then Comet renders decrypted thread row 100ms later
+    await msgrFrame.evaluate(() => {
+      new Notification('Nguyễn Văn A', { body: '', tag: 'msgr-e2ee-1' });
+      setTimeout(() => {
+        let nav = document.getElementById('comet-nav');
+        if (!nav) {
+          nav = document.createElement('div');
+          nav.id = 'comet-nav';
+          nav.setAttribute('role', 'navigation');
+          document.body.appendChild(nav);
+        }
+        nav.innerHTML = `
+          <div role="grid" aria-label="Đoạn chat">
+            <div role="row">
+              <div role="gridcell">
+                <a role="link" href="/messages/e2ee/t/10001/">
+                  <div>
+                    <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Đang hoạt động</span>
+                  </div>
+                  <div>
+                    <div>
+                      <span class="html-span">
+                        <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft" dir="auto">Nguyễn Văn A</span>
+                      </span>
+                    </div>
+                    <div>
+                      <span class="html-span">
+                        <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Tin nhắn chưa đọc:</span>
+                      </span>
+                      <span class="html-span">
+                        <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft" dir="auto">Tối nay 7h đi ăn phở nhé <img alt="🍜" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" /></span>
+                      </span>
+                      <span> · </span>
+                      <span>Vừa xong</span>
+                    </div>
+                  </div>
+                  <div role="button" aria-label="Menu"></div>
+                </a>
+              </div>
+            </div>
+          </div>
+        `;
+        document.title = '(1) Messenger';
+      }, 100);
+    });
+
+    await expect
+      .poll(async () =>
+        sw.evaluate(
+          () =>
+            (
+              globalThis as unknown as {
+                __capturedNotifs: Array<{ id: string; options: { title?: string; message?: string } }>;
+              }
+            ).__capturedNotifs
+        )
+      )
+      .toEqual([
+        expect.objectContaining({
+          options: expect.objectContaining({
+            title: 'Messenger • Nguyễn Văn A',
+            message: 'Tối nay 7h đi ăn phở nhé 🍜'
+          })
+        })
+      ]);
+
+    // Clear unread state before Case 2
+    await sw.evaluate(() => {
+      (globalThis as unknown as { __capturedNotifs: unknown[] }).__capturedNotifs.length = 0;
+    });
+    await msgrFrame.evaluate(() => {
+      document.getElementById('comet-nav')!.innerHTML = '<div role="grid" aria-label="Đoạn chat"></div>';
+      document.title = 'Messenger';
+    });
+    await expect(
+      page.locator('section[data-provider="messenger"] .pane-title-btn .badge')
+    ).toBeHidden();
+
+    // Case 2: Messenger does NOT call window.Notification; Comet updates DOM with blue unread dot + flashes document.title, then receives a 2nd message in the SAME thread
+    await msgrFrame.evaluate(() => {
+      document.getElementById('comet-nav')!.innerHTML = `
+        <div role="grid" aria-label="Đoạn chat">
+          <div role="row">
+            <div role="gridcell">
+              <a role="link" href="/t/20002/">
+                <span dir="auto">Trần Thu Hà</span>
+                <span class="html-span">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Tin nhắn chưa đọc:</span>
+                </span>
+                <span dir="auto">Gửi anh báo cáo quý 3 ạ</span>
+                <span> · </span>
+                <span>1 phút</span>
+                <div role="button" aria-label="Đánh dấu là đã đọc"></div>
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+      document.title = '(1) Messenger';
+      setTimeout(() => {
+        document.title = 'Trần Thu Hà đã nhắn tin cho bạn';
+      }, 500);
+    });
+
+    await expect
+      .poll(
+        async () =>
+          sw.evaluate(
+            () =>
+              (
+                globalThis as unknown as {
+                  __capturedNotifs: Array<{ options: { title?: string; message?: string } }>;
+                }
+              ).__capturedNotifs.map((n) => n.options)
+          ),
+        { timeout: 4000 }
+      )
+      .toEqual([
+        expect.objectContaining({
+          title: 'Messenger • Trần Thu Hà',
+          message: 'Gửi anh báo cáo quý 3 ạ'
+        })
+      ]);
+
+    // Follow-up message in the SAME already-unread Messenger thread (count remains 1!)
+    await msgrFrame.evaluate(() => {
+      const spans = document.querySelectorAll('#comet-nav [dir="auto"]');
+      if (spans[1]) {
+        spans[1].textContent = 'Em đính kèm thêm phụ lục nhé';
+      }
+      document.title = '(1) Messenger';
+    });
+
+    await expect
+      .poll(
+        async () =>
+          sw.evaluate(
+            () =>
+              (
+                globalThis as unknown as {
+                  __capturedNotifs: Array<{ options: { title?: string; message?: string } }>;
+                }
+              ).__capturedNotifs.map((n) => n.options)
+          ),
+        { timeout: 4000 }
+      )
+      .toEqual([
+        expect.objectContaining({
+          title: 'Messenger • Trần Thu Hà',
+          message: 'Gửi anh báo cáo quý 3 ạ'
+        }),
+        expect.objectContaining({
+          title: 'Messenger • Trần Thu Hà',
+          message: 'Em đính kèm thêm phụ lục nhé'
+        })
+      ]);
+
+    // Case 3: HTTP 302 redirect from /messenger -> /facebook/messages/e2ee/t/30003 keeps framing + content scripts + E2EE enrichment intact
+    await sw.evaluate(() => {
+      (globalThis as unknown as { __capturedNotifs: unknown[] }).__capturedNotifs.length = 0;
+    });
+    await page.evaluate((redirectUrl) => {
+      const iframe = document.querySelector<HTMLIFrameElement>(
+        'section[data-provider="messenger"] iframe'
+      );
+      if (iframe) iframe.src = redirectUrl;
+    }, `${baseUrl}/messenger?redirectFb=1`);
+
+    await expect(
+      page
+        .frameLocator('section[data-provider="messenger"] iframe')
+        .locator('#provider-heading')
+    ).toHaveText('facebook/messages/e2ee/t/30003');
+
+    const fbMsgrFrame = page
+      .frames()
+      .find((f) => f.url().endsWith('/facebook/messages/e2ee/t/30003'))!;
+    expect(fbMsgrFrame).toBeTruthy();
+
+    await fbMsgrFrame.evaluate(() => {
+      new Notification('Facebook', {
+        body: 'Lê Hoàng Nam đã gửi cho bạn một tin nhắn',
+        tag: 'fb-e2ee-3'
+      });
+      setTimeout(() => {
+        const nav = document.createElement('div');
+        nav.setAttribute('role', 'navigation');
+        nav.innerHTML = `
+          <div role="grid" aria-label="Đoạn chat">
+            <div role="row">
+              <a role="link" href="/messages/e2ee/t/30003/">
+                <span dir="auto">Lê Hoàng Nam</span>
+                <span class="html-span">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Tin nhắn chưa đọc:</span>
+                </span>
+                <span dir="auto">Chiều nay demo bản mới lúc 15h nhé</span>
+              </a>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(nav);
+      }, 100);
+    });
+
+    await expect
+      .poll(async () =>
+        sw.evaluate(
+          () =>
+            (
+              globalThis as unknown as {
+                __capturedNotifs: Array<{ options: { title?: string; message?: string } }>;
+              }
+            ).__capturedNotifs.map((n) => n.options)
+        )
+      )
+      .toEqual([
+        expect.objectContaining({
+          title: 'Messenger • Lê Hoàng Nam',
+          message: 'Chiều nay demo bản mới lúc 15h nhé'
+        })
+      ]);
   } finally {
     try {
       await context?.close();

@@ -77,6 +77,15 @@ describe('Manifest V3 & DNR Rulesets', () => {
     for (const cs of manifest.content_scripts) {
       expect(cs.all_frames).toBe(true);
       expect(cs.run_at).toBe('document_start');
+      expect(cs.matches).toEqual(
+        expect.arrayContaining([
+          '*://*.zalo.me/*',
+          '*://*.messenger.com/*',
+          '*://*.facebook.com/*',
+          '*://*.telegram.org/*',
+          '*://*.discord.com/*'
+        ])
+      );
     }
   });
 

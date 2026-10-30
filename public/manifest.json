@@ -64,6 +64,7 @@
       "matches": [
         "*://*.zalo.me/*",
         "*://*.messenger.com/*",
+        "*://*.facebook.com/*",
         "*://*.telegram.org/*",
         "*://*.discord.com/*"
       ],
@@ -76,6 +77,7 @@
       "matches": [
         "*://*.zalo.me/*",
         "*://*.messenger.com/*",
+        "*://*.facebook.com/*",
         "*://*.telegram.org/*",
         "*://*.discord.com/*"
       ],

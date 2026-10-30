@@ -2,31 +2,71 @@ const STYLE_ID = 'dia-sub-diet';
 
 export class UnreadFallbackTracker {
   private prevCount = 0;
+  private lastPreviewKey: string | null = null;
   private timerId: ReturnType<typeof setTimeout> | null = null;
   private recentRawNotifyAt: number | null = null;
+  private suppressPreviewChangeUntil: number | null = null;
 
   constructor(
     private readonly fallbackDelayMs: number,
     private readonly onFallbackNotify: (unreadCount: number) => void
   ) {}
 
-  onUnreadCount(nextCount: number): void {
+  onUnreadCount(nextCount: number, previewKey?: string | null): void {
+    const normalizedPreview =
+      typeof previewKey === 'string' && previewKey.length > 0 ? previewKey : null;
+    const wasPositive = this.prevCount > 0;
     const increased = nextCount > this.prevCount;
+    const previewChanged =
+      nextCount > 0 &&
+      !increased &&
+      normalizedPreview !== null &&
+      this.lastPreviewKey !== null &&
+      normalizedPreview !== this.lastPreviewKey;
+
     this.prevCount = nextCount;
     if (nextCount <= 0) {
+      this.lastPreviewKey = null;
+      if (wasPositive) {
+        this.recentRawNotifyAt = null;
+      }
+      this.suppressPreviewChangeUntil = null;
       if (this.timerId !== null) {
         clearTimeout(this.timerId);
         this.timerId = null;
       }
       return;
     }
-    if (!increased) return;
+
+    if (!increased && !previewChanged) {
+      if (normalizedPreview !== null && this.lastPreviewKey === null) {
+        this.lastPreviewKey = normalizedPreview;
+      }
+      return;
+    }
+
+    if (normalizedPreview !== null) {
+      this.lastPreviewKey = normalizedPreview;
+    }
+
+    const now = Date.now();
+    if (
+      previewChanged &&
+      this.suppressPreviewChangeUntil !== null &&
+      now < this.suppressPreviewChangeUntil
+    ) {
+      this.suppressPreviewChangeUntil = null;
+      return;
+    }
 
     if (this.recentRawNotifyAt !== null) {
-      const elapsed = Date.now() - this.recentRawNotifyAt;
+      const elapsed = now - this.recentRawNotifyAt;
       const suppressionWindowMs = Math.max(this.fallbackDelayMs * 4, 6000);
       this.recentRawNotifyAt = null;
       if (elapsed >= 0 && elapsed < suppressionWindowMs) {
+        if (increased) {
+          this.suppressPreviewChangeUntil = now + 1000;
+        }
         return;
       }
     }
@@ -42,7 +82,10 @@ export class UnreadFallbackTracker {
     }, this.fallbackDelayMs);
   }
 
-  onRawNotify(): void {
+  onRawNotify(previewKey?: string | null): void {
+    if (typeof previewKey === 'string' && previewKey.length > 0) {
+      this.lastPreviewKey = previewKey;
+    }
     if (this.timerId !== null) {
       clearTimeout(this.timerId);
       this.timerId = null;
@@ -52,12 +95,25 @@ export class UnreadFallbackTracker {
     this.recentRawNotifyAt = Date.now();
   }
 
+  recordNotifiedPreview(previewKey: string): void {
+    if (previewKey.length > 0) {
+      this.lastPreviewKey = previewKey;
+    }
+    if (this.timerId !== null) {
+      clearTimeout(this.timerId);
+      this.timerId = null;
+      this.recentRawNotifyAt = null;
+    }
+  }
+
   dispose(): void {
     if (this.timerId !== null) {
       clearTimeout(this.timerId);
       this.timerId = null;
     }
     this.recentRawNotifyAt = null;
+    this.suppressPreviewChangeUntil = null;
+    this.lastPreviewKey = null;
   }
 }
 

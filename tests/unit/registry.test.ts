@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   PROVIDER_ORDER,
   PROVIDERS,
+  extractSenderHintFromNotification,
   extractUnreadFromDom,
   extractUnreadPreviewFromDom,
   hasMountedChatList,
+  isGenericNotificationBody,
+  matchFrameProviderByUrl,
   matchProviderByUrl,
   parseUnreadFromTitle,
   resolveProviderUnreadCount
@@ -88,6 +91,19 @@ describe('ProviderRegistry', () => {
     expect(matchProviderByUrl('https://id.zalo.me/account')).toBe('zalo');
     expect(matchProviderByUrl('https://www.messenger.com/t/12345')).toBe('messenger');
     expect(matchProviderByUrl('https://messenger.com/login/')).toBe('messenger');
+    expect(matchProviderByUrl('https://www.facebook.com/messages')).toBe('messenger');
+    expect(matchProviderByUrl('https://www.facebook.com/messages/e2ee/t/987654')).toBe('messenger');
+    expect(matchProviderByUrl('https://facebook.com/messages/t/12345')).toBe('messenger');
+    // Normal Facebook feed/groups outside /messages must NOT be treated as external duplicate Messenger tabs
+    expect(matchProviderByUrl('https://www.facebook.com/')).toBeNull();
+    expect(matchProviderByUrl('https://www.facebook.com/groups/123')).toBeNull();
+    // Embedded workspace iframe matching maps any facebook.com auth/redirect URL to messenger
+    expect(matchFrameProviderByUrl('https://www.facebook.com/login.php?next=%2Fmessages')).toBe(
+      'messenger'
+    );
+    expect(matchFrameProviderByUrl('http://127.0.0.1:4173/facebook/messages/t/1')).toBe(
+      'messenger'
+    );
     expect(matchProviderByUrl('https://web.telegram.org/k/#@user')).toBe('telegram');
     expect(matchProviderByUrl('https://discord.com/channels/@me')).toBe('discord');
     expect(matchProviderByUrl('https://ptb.discord.com/channels/@me')).toBe('discord');
@@ -360,5 +376,141 @@ describe('ProviderRegistry', () => {
       }
     } as unknown as ParentNode;
     expect(resolveProviderUnreadCount('messenger', '(4) Messenger', spyRoot)).toBe(4);
+  });
+
+  it('extracts unread count and decrypted previews from real Comet Messenger / facebook.com/messages DOM (1x1 .html-span SR markers, blue dots, emojis, group prefixes, muted bell SVGs, and [role="main"] exclusion/fallback)', () => {
+    document.body.innerHTML = `
+      <div role="banner">Facebook Top Header</div>
+      <div role="navigation">
+        <div>
+          <div role="tab" aria-label="Chưa đọc">Chưa đọc</div>
+        </div>
+        <div role="grid" aria-label="Đoạn chat">
+          <!-- 1) Muted Comet thread with language-independent muted bell SVG (no aria-label) -->
+          <div role="row">
+            <div role="gridcell">
+              <a role="link" href="/messages/t/111/">
+                <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Nhóm Tắt Chuông SVG</span>
+                <span class="html-span">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Tin nhắn chưa đọc:</span>
+                </span>
+                <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Spam khuyến mãi</span>
+                <svg class="x1tzjh5l"><path d="M10 10" /></svg>
+              </a>
+            </div>
+          </div>
+
+          <!-- 2) Unmuted unread Comet E2EE thread (1x1 .html-span SR marker + online SR marker + emoji img + timestamp) -->
+          <div role="row">
+            <div role="gridcell">
+              <a role="link" href="/messages/e2ee/t/222/">
+                <div>
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Đang hoạt động</span>
+                </div>
+                <div>
+                  <span class="html-span">
+                    <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft" dir="auto">Nguyễn Văn A</span>
+                  </span>
+                  <span class="html-span">
+                    <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Tin nhắn chưa đọc:</span>
+                  </span>
+                  <span class="html-span">
+                    <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft" dir="auto">Chốt 7h tối nhé <img alt="(Y)" src="thumb.png" /></span>
+                  </span>
+                  <span> · </span>
+                  <span>Vừa xong</span>
+                </div>
+                <div role="button" aria-label="Menu"></div>
+              </a>
+            </div>
+          </div>
+
+          <!-- 3) Unmuted unread group chat marked via "Đánh dấu là đã đọc" button with split speaker prefix -->
+          <div role="row">
+            <div role="gridcell">
+              <a role="link" href="/messages/t/333/">
+                <span dir="auto">Team Sản Phẩm</span>
+                <span dir="auto">Hùng:</span>
+                <span dir="auto">Đã lên bản build mới · 2 phút</span>
+                <div role="button" aria-label="Đánh dấu là đã đọc"></div>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Open conversation history in [role="main"] must NOT be counted as unread sidebar threads,
+           but CAN provide snippet fallback when senderHint matches the open heading and sidebar is collapsed -->
+      <div role="main">
+        <h2 dir="auto">Phạm Minh Đức</h2>
+        <div role="grid">
+          <div role="row"><div dir="auto">Tin cũ buổi sáng</div></div>
+          <div role="row"><div dir="auto">Anh vừa gửi hợp đồng qua mail nhé</div></div>
+        </div>
+        <div role="textbox" contenteditable="true" dir="auto">Nháp đang gõ dở</div>
+      </div>
+    `;
+
+    // 2 unmuted unread threads (row #1 muted via svg.x1tzjh5l:not(.x1k90msu), [role="tab"] & [role="main"] ignored)
+    expect(extractUnreadFromDom('messenger', document)).toBe(2);
+    // Title flashing to "Nguyễn Văn A đã nhắn tin cho bạn" falls back to DOM unread count = 2 instead of dropping to 0
+    expect(
+      resolveProviderUnreadCount('messenger', 'Nguyễn Văn A đã nhắn tin cho bạn', document)
+    ).toBe(2);
+
+    // Default top unread preview extracts clean sender + decrypted message + thumbs-up emoji (stripping SR labels & timestamp)
+    expect(extractUnreadPreviewFromDom('messenger', document)).toEqual({
+      sender: 'Nguyễn Văn A',
+      snippet: 'Chốt 7h tối nhé 👍'
+    });
+
+    // Targeted senderHint matches the 2nd unread group row and joins speaker prefix + message while stripping trailing " · 2 phút"
+    expect(extractUnreadPreviewFromDom('messenger', document, 'Team Sản Phẩm')).toEqual({
+      sender: 'Team Sản Phẩm',
+      snippet: 'Hùng: Đã lên bản build mới'
+    });
+
+    // Targeted senderHint for currently-open chat in [role="main"] (e.g., narrow collapsed sidebar) reads last incoming bubble, ignoring composer draft
+    expect(extractUnreadPreviewFromDom('messenger', document, 'Phạm Minh Đức')).toEqual({
+      sender: 'Phạm Minh Đức',
+      snippet: 'Anh vừa gửi hợp đồng qua mail nhé'
+    });
+  });
+
+  it('detects generic/empty E2EE notification bodies while preserving real messages and attachment descriptions', () => {
+    expect(isGenericNotificationBody('', 'Nguyễn Văn A')).toBe(true);
+    expect(isGenericNotificationBody('   ', 'Messenger')).toBe(true);
+    expect(isGenericNotificationBody('Tin nhắn mới', 'Nguyễn Văn A')).toBe(true);
+    expect(isGenericNotificationBody('Bạn có tin nhắn mới', 'Messenger')).toBe(true);
+    expect(isGenericNotificationBody('Bạn có 2 tin nhắn chưa đọc', 'Messenger')).toBe(true);
+    expect(isGenericNotificationBody('Đã gửi một tin nhắn', 'Nguyễn Văn A')).toBe(true);
+    expect(isGenericNotificationBody('Đã gửi cho bạn một tin nhắn.', 'Nguyễn Văn A')).toBe(true);
+    expect(
+      isGenericNotificationBody('Nguyễn Văn A đã gửi cho bạn một tin nhắn', 'Messenger')
+    ).toBe(true);
+    expect(isGenericNotificationBody('Sent you a message', 'Alice')).toBe(true);
+    expect(isGenericNotificationBody('Alice sent you a message.', 'Messenger')).toBe(true);
+    expect(isGenericNotificationBody('New message', 'Messenger')).toBe(true);
+
+    // Real messages and media/sticker attachment previews MUST NOT be treated as generic placeholders
+    expect(isGenericNotificationBody('Đã gửi một ảnh', 'Nguyễn Văn A')).toBe(false);
+    expect(isGenericNotificationBody('Sent a photo', 'Alice')).toBe(false);
+    expect(isGenericNotificationBody('Đã gửi một nhãn dán', 'Nguyễn Văn A')).toBe(false);
+    expect(isGenericNotificationBody('Tối nay 7h đi ăn nhé', 'Nguyễn Văn A')).toBe(false);
+
+    expect(
+      extractSenderHintFromNotification('messenger', '(1) Nguyễn Văn A', '')
+    ).toBe('Nguyễn Văn A');
+    expect(
+      extractSenderHintFromNotification(
+        'messenger',
+        'Messenger',
+        'Trần Thu Hà đã gửi cho bạn một tin nhắn'
+      )
+    ).toBe('Trần Thu Hà');
+    expect(
+      extractSenderHintFromNotification('messenger', 'Facebook', 'Alice sent you a message.')
+    ).toBe('Alice');
+    expect(extractSenderHintFromNotification('messenger', 'Messenger', 'Tin nhắn mới')).toBeNull();
   });
 });

@@ -80,6 +80,17 @@ export function installNotificationHook(
   const instances = new Map<string, StoredNotifyTarget>();
   let tokenSeq = 0;
 
+  const registerTarget = (target: StoredNotifyTarget): string => {
+    tokenSeq += 1;
+    const notifToken = `nt-${Date.now()}-${tokenSeq}`;
+    instances.set(notifToken, target);
+    if (instances.size > 50) {
+      const oldest = instances.keys().next().value;
+      if (oldest) instances.delete(oldest);
+    }
+    return notifToken;
+  };
+
   class DiaNotificationProxy extends EventTarget {
     static permission: NotificationPermission = 'granted';
     static maxActions = 2;
@@ -101,21 +112,16 @@ export function installNotificationHook(
     onerror: ((this: Notification, ev: Event) => unknown) | null = null;
     onshow: ((this: Notification, ev: Event) => unknown) | null = null;
 
-    constructor(title: string, options: NotificationOptions = {}) {
+    constructor(title: string, options?: NotificationOptions | null) {
       super();
+      const opts = options && typeof options === 'object' ? options : {};
       this.title = String(title ?? '');
-      this.body = String(options.body ?? '');
-      this.tag = String(options.tag ?? '');
-      this.icon = String(options.icon ?? '');
-      this.data = options.data ?? null;
+      this.body = String(opts.body ?? '');
+      this.tag = String(opts.tag ?? '');
+      this.icon = String(opts.icon ?? '');
+      this.data = opts.data ?? null;
 
-      tokenSeq += 1;
-      const notifToken = `nt-${Date.now()}-${tokenSeq}`;
-      instances.set(notifToken, this);
-      if (instances.size > 50) {
-        const oldest = instances.keys().next().value;
-        if (oldest) instances.delete(oldest);
-      }
+      const notifToken = registerTarget(this);
 
       onRawNotify({
         type: 'RAW_NOTIFY',
@@ -138,6 +144,39 @@ export function installNotificationHook(
     configurable: true,
     writable: true
   });
+
+  const swRegCtor = (
+    targetWin as unknown as {
+      ServiceWorkerRegistration?: {
+        prototype?: {
+          showNotification?: (
+            title: string,
+            options?: NotificationOptions | null
+          ) => Promise<void>;
+        };
+      };
+    }
+  ).ServiceWorkerRegistration;
+  if (swRegCtor?.prototype && typeof swRegCtor.prototype.showNotification === 'function') {
+    Object.defineProperty(swRegCtor.prototype, 'showNotification', {
+      value(title: string, options?: NotificationOptions | null): Promise<void> {
+        const opts = options && typeof options === 'object' ? options : {};
+        const dummyTarget = new EventTarget() as EventTarget & StoredNotifyTarget;
+        dummyTarget.onclick = null;
+        const notifToken = registerTarget(dummyTarget);
+        onRawNotify({
+          type: 'RAW_NOTIFY',
+          title: String(title ?? ''),
+          body: String(opts.body ?? ''),
+          tag: opts.tag ? String(opts.tag) : undefined,
+          notifToken
+        });
+        return Promise.resolve();
+      },
+      configurable: true,
+      writable: true
+    });
+  }
 
   return {
     triggerClick(notifToken: string): boolean {

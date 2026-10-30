@@ -8,8 +8,10 @@ import { extractAltShortcutDigit, isAltMaximizeShortcut } from '../shared/shortc
 import {
   PROVIDER_ORDER,
   PROVIDERS,
+  extractSenderHintFromNotification,
   extractUnreadPreviewFromDom,
-  matchProviderByUrl,
+  isGenericNotificationBody,
+  matchFrameProviderByUrl,
   resolveProviderUnreadCount
 } from '../providers/registry';
 import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
@@ -32,7 +34,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     }
   }
 
-  const providerId = matchProviderByUrl(window.location.href);
+  const providerId = matchFrameProviderByUrl(window.location.href);
   if (!providerId) return;
 
   const MAIN_TO_ISO = '__dia_main_to_iso__';
@@ -49,6 +51,7 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
   let bodyDebounceTimer: number | null = null;
   let pollTimer: number | null = null;
   let rawNotifySyncTimer: number | null = null;
+  const pendingEnrichTimers = new Set<number>();
 
   const sendToMain = (cmd: IsolatedToMainEvent): void => {
     window.dispatchEvent(new CustomEvent<string>(ISO_TO_MAIN, { detail: JSON.stringify(cmd) }));
@@ -96,7 +99,14 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
       lastReportedUnread = count;
       sendToBackground({ type: 'UNREAD_UPDATE', providerId, count });
     }
-    fallbackTracker.onUnreadCount(count);
+    let previewKey: string | null = null;
+    if (providerId === 'messenger' && count > 0 && document.body) {
+      const preview = extractUnreadPreviewFromDom('messenger', document.body);
+      if (preview?.sender && preview.snippet) {
+        previewKey = `${preview.sender}\0${preview.snippet}`;
+      }
+    }
+    fallbackTracker.onUnreadCount(count, previewKey);
   };
 
   const onMainToIso = (rawEv: Event): void => {
@@ -118,24 +128,68 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
         rawNotifySyncTimer = null;
         evaluateUnread();
       }, 250);
-      const title =
-        typeof parsed.title === 'string' && parsed.title
+      const rawTitle =
+        typeof parsed.title === 'string' && parsed.title.trim()
           ? parsed.title
           : PROVIDERS[providerId].name;
       const body = typeof parsed.body === 'string' ? parsed.body : '';
       const tag = typeof parsed.tag === 'string' && parsed.tag ? parsed.tag : undefined;
       const notifToken =
         typeof parsed.notifToken === 'string' && parsed.notifToken ? parsed.notifToken : undefined;
-      sendToBackground({
-        type: 'CHAT_NOTIFY',
-        payload: {
-          providerId,
-          title,
-          body,
-          tag,
-          notifToken
+
+      if (!isGenericNotificationBody(body, rawTitle)) {
+        sendToBackground({
+          type: 'CHAT_NOTIFY',
+          payload: {
+            providerId,
+            title: rawTitle,
+            body,
+            tag,
+            notifToken
+          }
+        });
+        return;
+      }
+
+      const senderHint = extractSenderHintFromNotification(providerId, rawTitle, body);
+      const dispatchEnriched = (allowRetry: boolean): void => {
+        const preview = document.body
+          ? extractUnreadPreviewFromDom(providerId, document.body, senderHint)
+          : null;
+        if (!preview?.snippet && allowRetry) {
+          const retryId = window.setTimeout(() => {
+            pendingEnrichTimers.delete(retryId);
+            dispatchEnriched(false);
+          }, 350);
+          pendingEnrichTimers.add(retryId);
+          return;
         }
-      });
+        const resolvedSnippet = preview?.snippet || '';
+        if (preview?.sender && resolvedSnippet) {
+          fallbackTracker.recordNotifiedPreview(`${preview.sender}\0${resolvedSnippet}`);
+        }
+        const fallbackTitle = /^facebook$/i.test(rawTitle.trim())
+          ? PROVIDERS[providerId].name
+          : rawTitle;
+        const finalTitle = senderHint || preview?.sender || fallbackTitle;
+        const finalBody = resolvedSnippet || (senderHint ? '' : body);
+        sendToBackground({
+          type: 'CHAT_NOTIFY',
+          payload: {
+            providerId,
+            title: finalTitle,
+            body: finalBody,
+            tag,
+            notifToken
+          }
+        });
+      };
+
+      const enrichTimerId = window.setTimeout(() => {
+        pendingEnrichTimers.delete(enrichTimerId);
+        dispatchEnriched(true);
+      }, 250);
+      pendingEnrichTimers.add(enrichTimerId);
     }
   };
 
@@ -241,6 +295,23 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     applySlotPolicy();
   };
 
+  const containsTitleNode = (nodes: NodeList): boolean => {
+    for (const node of nodes) {
+      if (node.nodeName === 'TITLE') return true;
+      if (node instanceof Element && node.querySelector('title') !== null) return true;
+    }
+    return false;
+  };
+
+  const isTitleMutation = (records: readonly MutationRecord[]): boolean =>
+    records.some(
+      (rec) =>
+        rec.target.nodeName === 'TITLE' ||
+        rec.target.parentNode?.nodeName === 'TITLE' ||
+        (rec.type === 'childList' &&
+          (containsTitleNode(rec.addedNodes) || containsTitleNode(rec.removedNodes)))
+    );
+
   const bootDomObservers = (): void => {
     if (domBooted) return;
     domBooted = true;
@@ -251,7 +322,11 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
     document.documentElement?.addEventListener('pointermove', onPointerMove, { passive: true });
     document.documentElement?.addEventListener('mouseleave', onMouseLeave);
 
-    observer = new MutationObserver(() => evaluateUnread());
+    observer = new MutationObserver((records) => {
+      if (isTitleMutation(records)) {
+        evaluateUnread();
+      }
+    });
     const observeRoot = document.head ?? document.documentElement;
     if (observeRoot) {
       observer.observe(observeRoot, { subtree: true, childList: true, characterData: true });
@@ -318,6 +393,10 @@ import { UnreadFallbackTracker, syncSubPaneDiet } from './unread-observer';
         window.clearTimeout(rawNotifySyncTimer);
         rawNotifySyncTimer = null;
       }
+      for (const timerId of pendingEnrichTimers) {
+        window.clearTimeout(timerId);
+      }
+      pendingEnrichTimers.clear();
       fallbackTracker.dispose();
     }
   });

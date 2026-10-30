@@ -56,6 +56,51 @@ describe('MAIN world hooks (Notification & rAF Governor)', () => {
 
     instance.close();
     expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Null options object must not throw TypeError, and ServiceWorkerRegistration.prototype.showNotification is also intercepted
+    const nullOptsNotif = new window.Notification(
+      'Null Opts',
+      null as unknown as NotificationOptions
+    );
+    expect(nullOptsNotif.body).toBe('');
+    expect(events[1]).toMatchObject({ title: 'Null Opts', body: '' });
+  });
+
+  it('intercepts ServiceWorkerRegistration.prototype.showNotification when present on window', async () => {
+    const origSwReg = (window as unknown as { ServiceWorkerRegistration?: unknown })
+      .ServiceWorkerRegistration;
+    class FakeSwReg {
+      showNotification(_title: string, _options?: NotificationOptions): Promise<void> {
+        return Promise.resolve();
+      }
+    }
+    (window as unknown as { ServiceWorkerRegistration: typeof FakeSwReg }).ServiceWorkerRegistration =
+      FakeSwReg;
+
+    try {
+      const events: Array<{ title: string; body: string; tag?: string; notifToken: string }> = [];
+      installNotificationHook(window, (ev) => events.push(ev));
+
+      const reg = new FakeSwReg();
+      await reg.showNotification('Nguyễn Văn A', {
+        body: 'Tin nhắn từ ServiceWorker',
+        tag: 'sw-1'
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        title: 'Nguyễn Văn A',
+        body: 'Tin nhắn từ ServiceWorker',
+        tag: 'sw-1'
+      });
+    } finally {
+      if (origSwReg === undefined) {
+        Reflect.deleteProperty(window, 'ServiceWorkerRegistration');
+      } else {
+        (window as unknown as { ServiceWorkerRegistration: unknown }).ServiceWorkerRegistration =
+          origSwReg;
+      }
+    }
   });
 
   it('caps stored Notification instances at 50 FIFO entries', () => {
@@ -185,6 +230,38 @@ describe('ISOLATED world UnreadFallbackTracker & SubPaneDiet', () => {
     vi.advanceTimersByTime(300);
     tracker.dispose();
     vi.advanceTimersByTime(1500);
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+
+  it('triggers fallback notification when unread preview changes while count remains equal (e.g. 2nd message in same Messenger thread)', () => {
+    const onFallback = vi.fn();
+    const tracker = new UnreadFallbackTracker(1500, onFallback);
+
+    // 1st message arrives: title updates first (previewKey null), then 200ms later DOM renders previewKey -> fires ONCE at 1500ms
+    tracker.onUnreadCount(1, null);
+    vi.advanceTimersByTime(200);
+    tracker.onUnreadCount(1, 'Nguyễn Văn A\0Tin số 1');
+    vi.advanceTimersByTime(1500);
+    expect(onFallback).toHaveBeenCalledTimes(1);
+
+    // Same preview polled again -> no duplicate fallback
+    onFallback.mockClear();
+    tracker.onUnreadCount(1, 'Nguyễn Văn A\0Tin số 1');
+    vi.advanceTimersByTime(2000);
+    expect(onFallback).not.toHaveBeenCalled();
+
+    // 2nd message in the SAME thread: count stays 1, but previewKey changes -> fires fallback!
+    tracker.onUnreadCount(1, 'Nguyễn Văn A\0Tin số 2 quan trọng');
+    vi.advanceTimersByTime(1500);
+    expect(onFallback).toHaveBeenCalledTimes(1);
+    expect(onFallback).toHaveBeenCalledWith(1);
+
+    // 3rd message accompanied by RAW_NOTIFY -> suppressed without duplicate fallback
+    onFallback.mockClear();
+    tracker.onRawNotify();
+    vi.advanceTimersByTime(200);
+    tracker.onUnreadCount(1, 'Nguyễn Văn A\0Tin số 3 đã có RAW_NOTIFY');
+    vi.advanceTimersByTime(2000);
     expect(onFallback).not.toHaveBeenCalled();
   });
 
@@ -608,7 +685,15 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
     window.dispatchEvent(new Event('pointerdown', { bubbles: true }));
     expect(sentMessages.filter((m) => m.type === 'FRAME_FOCUSED')).toHaveLength(3);
 
-    // Title mutation fires MutationObserver immediately without waiting for 3000ms poll
+    // Non-title <head> mutations (<style>/<link>) do not trigger un-debounced DOM unread scans, while <title> mutation fires immediately
+    const queryAllSpy = vi.spyOn(document.body, 'querySelectorAll');
+    const dynamicStyle = document.createElement('style');
+    dynamicStyle.textContent = '.css-in-js { color: red; }';
+    document.head.appendChild(dynamicStyle);
+    await Promise.resolve();
+    expect(queryAllSpy).not.toHaveBeenCalled();
+    queryAllSpy.mockRestore();
+
     sentMessages.length = 0;
     document.title = '(7) Telegram';
     await Promise.resolve();
@@ -764,5 +849,136 @@ describe('Content script entrypoints (notify-hook.main & frame-agent.isolated)',
         tag: 'fallback-telegram-Phạm Quốc Bảo-Em vừa đẩy bản hotfix lê'
       }
     });
+  });
+
+  it('activates on facebook.com/messages iframe and enriches empty/generic Messenger E2EE RAW_NOTIFY bodies from delayed Comet DOM updates', async () => {
+    const savedHref = window.location.href;
+    const sentMessages: RuntimeMessage[] = [];
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'dia-ext-id',
+        sendMessage: vi.fn((msg: RuntimeMessage, cb?: () => void) => {
+          sentMessages.push(msg);
+          cb?.();
+        }),
+        lastError: undefined
+      }
+    });
+
+    const fakeWorkspaceWin = {} as Window;
+    Object.defineProperty(window, 'top', { value: fakeWorkspaceWin, configurable: true });
+    Object.defineProperty(window, 'parent', { value: fakeWorkspaceWin, configurable: true });
+    Object.defineProperty(window.location, 'ancestorOrigins', {
+      value: ['chrome-extension://dia-ext-id'] as unknown as DOMStringList,
+      configurable: true
+    });
+    const origLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      value: {
+        ...origLocation,
+        href: 'https://www.facebook.com/messages/e2ee/t/888888/',
+        ancestorOrigins: ['chrome-extension://dia-ext-id'] as unknown as DOMStringList
+      },
+      configurable: true
+    });
+    Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true });
+
+    try {
+      await import('../../src/content/notify-hook.main');
+      await import('../../src/content/frame-agent.isolated');
+
+      sentMessages.length = 0;
+
+      // Messenger fires E2EE Notification with generic placeholder body BEFORE Comet renders the decrypted DOM row
+      new window.Notification('Messenger', {
+        body: 'Nguyễn Văn A đã gửi cho bạn một tin nhắn',
+        tag: 'e2ee-msg-1'
+      });
+      // Should wait briefly for Comet DOM commit rather than immediately sending generic body
+      expect(sentMessages.filter((m) => m.type === 'CHAT_NOTIFY')).toHaveLength(0);
+
+      // 100ms later, Comet commits the decrypted conversation row into [role="navigation"] [role="grid"]
+      vi.advanceTimersByTime(100);
+      document.body.innerHTML = `
+        <div role="navigation">
+          <div role="grid">
+            <div role="row">
+              <a role="link" href="/messages/e2ee/t/888888/">
+                <span dir="auto">Nguyễn Văn A</span>
+                <span class="html-span">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Tin nhắn chưa đọc:</span>
+                </span>
+                <span dir="auto">Mật khẩu wifi phòng họp là 88889999</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+
+      vi.advanceTimersByTime(200);
+      const chatNotifs = sentMessages.filter((m) => m.type === 'CHAT_NOTIFY');
+      expect(chatNotifs).toHaveLength(1);
+      expect(chatNotifs[0]).toEqual({
+        type: 'CHAT_NOTIFY',
+        payload: {
+          providerId: 'messenger',
+          title: 'Nguyễn Văn A',
+          body: 'Mật khẩu wifi phòng họp là 88889999',
+          tag: 'e2ee-msg-1',
+          notifToken: expect.stringMatching(/^nt-/)
+        }
+      });
+
+      // Verify no duplicate fallback fires afterwards
+      vi.advanceTimersByTime(3000);
+      expect(sentMessages.filter((m) => m.type === 'CHAT_NOTIFY')).toHaveLength(1);
+
+      // User reads thread (unread -> 0), then 400ms later a NEW silent Comet DOM message arrives -> fallback MUST fire (no stale recentRawNotifyAt)
+      document.body.innerHTML = '<div role="navigation"><div role="grid"></div></div>';
+      await Promise.resolve();
+      vi.advanceTimersByTime(220);
+      expect(sentMessages).toContainEqual({
+        type: 'UNREAD_UPDATE',
+        providerId: 'messenger',
+        count: 0
+      });
+
+      sentMessages.length = 0;
+      vi.advanceTimersByTime(400);
+      document.body.innerHTML = `
+        <div role="navigation">
+          <div role="grid">
+            <div role="row">
+              <a role="link" href="/messages/e2ee/t/999999/">
+                <span dir="auto">Trần Thu Hà</span>
+                <span class="html-span">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Tin nhắn chưa đọc:</span>
+                </span>
+                <span dir="auto">Gửi anh biên bản cuộc họp sáng nay</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      `;
+      await Promise.resolve();
+      vi.advanceTimersByTime(1800);
+      expect(sentMessages.filter((m) => m.type === 'CHAT_NOTIFY')).toEqual([
+        {
+          type: 'CHAT_NOTIFY',
+          payload: {
+            providerId: 'messenger',
+            title: 'Trần Thu Hà',
+            body: 'Gửi anh biên bản cuộc họp sáng nay',
+            tag: 'fallback-messenger-Trần Thu Hà-Gửi anh biên bản cuộc họ'
+          }
+        }
+      ]);
+    } finally {
+      Object.defineProperty(window, 'location', {
+        value: origLocation,
+        configurable: true
+      });
+      expect(window.location.href).toBe(savedHref);
+    }
   });
 });
