@@ -4,4 +4,11 @@ dist/
 coverage/
 test-results/
 playwright-report/
+blob-report/
+playwright/.cache/
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
 .DS_Store

@@ -668,6 +668,12 @@ describe('MV3 background service-worker', () => {
     });
     expect(invalidMaxRes).toEqual({ ok: false });
 
+    const invalidPrefsRes = await env.dispatchMessage({
+      type: 'SYNC_PREFS',
+      prefs: null as never
+    });
+    expect(invalidPrefsRes).toEqual({ ok: false });
+
     // 4) chrome.notifications.create setting runtime.lastError rolls back dedup entry so retry succeeds
     env.chromeMock.notifications.create.mockImplementationOnce((id, _opts, cb) => {
       (env.chromeMock.runtime as { lastError?: { message: string } }).lastError = {

@@ -10,6 +10,7 @@ export type ActionIconName =
   | 'pin';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+let messengerGradSeq = 0;
 
 function svgEl<K extends keyof SVGElementTagNameMap>(
   tag: K,
@@ -44,7 +45,8 @@ export function createBrandIconSvg(providerId: ProviderId, size = 15): SVGSVGEle
       })
     );
   } else if (providerId === 'messenger') {
-    const gradId = `dia-msgr-grad-${Math.random().toString(36).slice(2, 8)}`;
+    messengerGradSeq += 1;
+    const gradId = `dia-msgr-grad-${messengerGradSeq}`;
     const defs = svgEl('defs');
     const grad = svgEl('linearGradient', { id: gradId, x1: '0', y1: '1', x2: '1', y2: '0' });
     grad.append(

@@ -524,10 +524,17 @@ chrome.runtime.onMessage.addListener((rawMsg: RuntimeMessage, sender, sendRespon
       return true;
     }
     case 'SYNC_PREFS': {
+      if (!rawMsg.prefs || typeof rawMsg.prefs !== 'object') {
+        sendResponse({ ok: false });
+        return false;
+      }
       prefsUpdatedInMemory = true;
-      const nextPrefs = { dnd: rawMsg.prefs.dnd, hidePreview: rawMsg.prefs.hidePreview };
+      const nextPrefs = {
+        dnd: Boolean(rawMsg.prefs.dnd),
+        hidePreview: Boolean(rawMsg.prefs.hidePreview)
+      };
       router.setPrefs(nextPrefs);
-      void applyLiteMediaRuleset(rawMsg.prefs.liteMedia);
+      void applyLiteMediaRuleset(Boolean(rawMsg.prefs.liteMedia));
       void (async () => {
         try {
           await ensureHydrated();

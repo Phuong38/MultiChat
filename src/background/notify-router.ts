@@ -66,14 +66,21 @@ export class NotifyRouter {
   }
 
   async handleIncoming(payload: NotifyPayload, nowMs = Date.now()): Promise<string | null> {
+    if (!payload || typeof payload !== 'object') return null;
     if (!Object.hasOwn(PROVIDERS, payload.providerId)) return null;
     if (this.dnd) return null;
     if (this.windowFocused && this.focusedProvider === payload.providerId) {
       return null;
     }
 
+    const rawTitle = typeof payload.title === 'string' ? payload.title : '';
+    const rawBody = typeof payload.body === 'string' ? payload.body : '';
+    const rawTag = typeof payload.tag === 'string' ? payload.tag : '';
+    const rawToken =
+      typeof payload.notifToken === 'string' && payload.notifToken ? payload.notifToken : undefined;
+
     this.pruneOld(nowMs);
-    const dedupKey = `${payload.providerId}:${payload.tag || `${payload.title}|${payload.body}`}`;
+    const dedupKey = `${payload.providerId}:${rawTag || `${rawTitle}|${rawBody}`}`;
     const lastSeen = this.recentFingerprints.get(dedupKey);
     if (typeof lastSeen === 'number' && nowMs - lastSeen < DEDUP_WINDOW_MS) {
       return null;
@@ -83,19 +90,19 @@ export class NotifyRouter {
     const providerName = PROVIDERS[payload.providerId].name;
     const { title, message } = formatNotificationContent(
       providerName,
-      payload.title,
-      payload.body,
+      rawTitle,
+      rawBody,
       this.hidePreview
     );
 
     this.seq += 1;
-    const rawEncoded = payload.notifToken ? encodeURIComponent(payload.notifToken) : '';
+    const rawEncoded = rawToken ? encodeURIComponent(rawToken) : '';
     const tokenSuffix =
       rawEncoded && rawEncoded.length <= MAX_ENCODED_TOKEN_LEN ? `:${rawEncoded}` : '';
     const notifId = `dia-chat:${payload.providerId}:${nowMs}:${this.seq}${tokenSuffix}`;
     const target: { providerId: ProviderId; notifToken?: string } =
-      payload.notifToken !== undefined
-        ? { providerId: payload.providerId, notifToken: payload.notifToken }
+      rawToken !== undefined
+        ? { providerId: payload.providerId, notifToken: rawToken }
         : { providerId: payload.providerId };
     this.tokenByNotifId.set(notifId, target);
     if (this.tokenByNotifId.size > MAX_STORED_TOKENS) {

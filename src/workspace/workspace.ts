@@ -535,37 +535,61 @@ function bindEvents(): void {
     { signal }
   );
 
-  document.getElementById('btn-lite-media')?.addEventListener('click', () => {
-    prefs.liteMedia = !prefs.liteMedia;
-    applyLayout();
-    savePrefs();
-  });
+  document.getElementById('btn-lite-media')?.addEventListener(
+    'click',
+    () => {
+      prefs.liteMedia = !prefs.liteMedia;
+      applyLayout();
+      savePrefs();
+    },
+    { signal }
+  );
 
-  document.getElementById('btn-hide-preview')?.addEventListener('click', () => {
-    prefs.hidePreview = !prefs.hidePreview;
-    applyLayout();
-    savePrefs();
-  });
+  document.getElementById('btn-hide-preview')?.addEventListener(
+    'click',
+    () => {
+      prefs.hidePreview = !prefs.hidePreview;
+      applyLayout();
+      savePrefs();
+    },
+    { signal }
+  );
 
-  document.getElementById('btn-dnd')?.addEventListener('click', () => {
-    prefs.dnd = !prefs.dnd;
-    applyLayout();
-    savePrefs();
-  });
+  document.getElementById('btn-dnd')?.addEventListener(
+    'click',
+    () => {
+      prefs.dnd = !prefs.dnd;
+      applyLayout();
+      savePrefs();
+    },
+    { signal }
+  );
 
-  document.getElementById('btn-pin-topbar')?.addEventListener('click', () => {
-    prefs.topbarPinned = !prefs.topbarPinned;
-    applyLayout();
-    savePrefs();
-  });
+  document.getElementById('btn-pin-topbar')?.addEventListener(
+    'click',
+    () => {
+      prefs.topbarPinned = !prefs.topbarPinned;
+      applyLayout();
+      savePrefs();
+    },
+    { signal }
+  );
 
-  document.getElementById('btn-test-notify')?.addEventListener('click', () => {
-    sendRuntime({ type: 'TEST_NOTIFY' });
-  });
+  document.getElementById('btn-test-notify')?.addEventListener(
+    'click',
+    () => {
+      sendRuntime({ type: 'TEST_NOTIFY' });
+    },
+    { signal }
+  );
 
-  document.getElementById('dup-tabs-btn')?.addEventListener('click', () => {
-    sendRuntime({ type: 'CLOSE_DUP_TABS' }, () => updateDupTabsBanner([]));
-  });
+  document.getElementById('dup-tabs-btn')?.addEventListener(
+    'click',
+    () => {
+      sendRuntime({ type: 'CLOSE_DUP_TABS' }, () => updateDupTabsBanner([]));
+    },
+    { signal }
+  );
 
   window.addEventListener(
     'keydown',
@@ -599,43 +623,51 @@ function bindEvents(): void {
   const resizer = document.getElementById('grid-resizer');
   const indicator = document.getElementById('resize-indicator');
 
-  resizer?.addEventListener('dblclick', () => {
-    prefs.mainWidthPct = 66;
-    document.documentElement.style.setProperty('--main-width', '66%');
-    savePrefs();
-  });
+  resizer?.addEventListener(
+    'dblclick',
+    () => {
+      prefs.mainWidthPct = 66;
+      document.documentElement.style.setProperty('--main-width', '66%');
+      savePrefs();
+    },
+    { signal }
+  );
 
-  resizer?.addEventListener('mousedown', (startEv) => {
-    startEv.preventDefault();
-    document.body.classList.add('resizing');
-    if (indicator) {
-      indicator.textContent = formatSplitRatio(prefs.mainWidthPct);
-      indicator.classList.remove('hidden');
-    }
-    let ended = false;
-    const onMove = (moveEv: MouseEvent) => {
-      if (window.innerWidth <= 0) return;
-      const pct = (moveEv.clientX / window.innerWidth) * 100;
-      prefs.mainWidthPct = clampMainWidth(pct);
-      document.documentElement.style.setProperty('--main-width', `${prefs.mainWidthPct}%`);
+  resizer?.addEventListener(
+    'mousedown',
+    (startEv) => {
+      startEv.preventDefault();
+      document.body.classList.add('resizing');
       if (indicator) {
         indicator.textContent = formatSplitRatio(prefs.mainWidthPct);
+        indicator.classList.remove('hidden');
       }
-    };
-    const onUp = () => {
-      if (ended) return;
-      ended = true;
-      document.body.classList.remove('resizing');
-      indicator?.classList.add('hidden');
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('blur', onUp);
-      savePrefs();
-    };
-    window.addEventListener('mousemove', onMove, { signal });
-    window.addEventListener('mouseup', onUp, { signal });
-    window.addEventListener('blur', onUp, { signal });
-  });
+      let ended = false;
+      const onMove = (moveEv: MouseEvent) => {
+        if (window.innerWidth <= 0) return;
+        const pct = (moveEv.clientX / window.innerWidth) * 100;
+        prefs.mainWidthPct = clampMainWidth(pct);
+        document.documentElement.style.setProperty('--main-width', `${prefs.mainWidthPct}%`);
+        if (indicator) {
+          indicator.textContent = formatSplitRatio(prefs.mainWidthPct);
+        }
+      };
+      const onUp = () => {
+        if (ended) return;
+        ended = true;
+        document.body.classList.remove('resizing');
+        indicator?.classList.add('hidden');
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        window.removeEventListener('blur', onUp);
+        savePrefs();
+      };
+      window.addEventListener('mousemove', onMove, { signal });
+      window.addEventListener('mouseup', onUp, { signal });
+      window.addEventListener('blur', onUp, { signal });
+    },
+    { signal }
+  );
 
   if (globalThis.chrome?.runtime?.onMessage) {
     chrome.runtime.onMessage.addListener(onRuntimeMessage);
